@@ -1,6 +1,11 @@
 import type { Address, ReducerName } from './address.js';
 
-export type MessageType = 'HELLO' | 'STATUS' | 'SHARE' | 'CLOSE';
+export enum MessageType {
+    Hello = 'HELLO',
+    Status = 'STATUS',
+    Share = 'SHARE',
+    Close = 'CLOSE',
+}
 
 export interface ReducerPayload {
     value: unknown;

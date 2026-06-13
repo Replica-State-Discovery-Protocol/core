@@ -13,9 +13,18 @@ export class GuardRejected extends RsdpError {}
 
 export class SlanError extends RsdpError {}
 
+export enum PipelineStage {
+    Middleware = 'middleware',
+    Guard = 'guard',
+    Interceptor = 'interceptor',
+    Normalizer = 'normalizer',
+    Aggregator = 'aggregator',
+    Translator = 'translator',
+}
+
 export interface PipelineErrorContext {
     reducer: string;
-    stage: 'middleware' | 'guard' | 'interceptor' | 'normalizer' | 'aggregator' | 'translator';
+    stage: PipelineStage;
     messageType: MessageType;
 }
 
