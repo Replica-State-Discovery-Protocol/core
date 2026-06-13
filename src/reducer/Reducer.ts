@@ -113,9 +113,9 @@ export class ReducerBuilder<S, V, Ctx extends Context> {
         const close = need(this.closeB, 'a CLOSE pipeline');
         const translator = need(this.translator, 'a translator');
         for (const [b, label] of [
-            [status, 'STATUS'],
-            [share, 'SHARE'],
-            [close, 'CLOSE'],
+            [status, MessageType.Status],
+            [share, MessageType.Share],
+            [close, MessageType.Close],
         ] as const) {
             if (!b.aggregator) throw new ConfigError(`reducer "${this.name}" ${label} pipeline has no aggregator`);
         }
