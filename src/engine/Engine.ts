@@ -23,13 +23,13 @@ export interface EngineConfig {
 }
 
 export interface StateSnapshot<Ctx extends Context> {
-    get<V>(reducer: Reducer<unknown, V, Ctx>): TranslatedState<V> | null;
+    get<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null;
 }
 
 export interface Engine<Ctx extends Context> {
     start(): Promise<void>;
     stop(): Promise<void>;
-    stateOf<V>(reducer: Reducer<unknown, V, Ctx>): TranslatedState<V> | null;
+    stateOf<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null;
     stateByName(name: ReducerName): TranslatedState<unknown> | null;
     onConverged(cb: (snapshot: StateSnapshot<Ctx>) => void): Unsubscribe;
     onError(cb: (err: RsdpError) => void): Unsubscribe;
@@ -253,13 +253,13 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     private snapshotView(): StateSnapshot<Ctx> {
         const slots = this.slots;
         return {
-            get<V>(reducer: Reducer<unknown, V, Ctx>): TranslatedState<V> | null {
+            get<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null {
                 return (slots.get(reducer.name)?.translated as TranslatedState<V> | undefined) ?? null;
             },
         };
     }
 
-    stateOf<V>(reducer: Reducer<unknown, V, Ctx>): TranslatedState<V> | null {
+    stateOf<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null {
         return (this.slots.get(reducer.name)?.translated as TranslatedState<V> | undefined) ?? null;
     }
     stateByName(name: ReducerName): TranslatedState<unknown> | null {
