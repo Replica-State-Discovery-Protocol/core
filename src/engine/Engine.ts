@@ -20,6 +20,15 @@ export interface EngineConfig {
     debounce: DebounceConfig;
     ttlMs: number;
     sweepIntervalMs: number;
+    /**
+     * Periodic resync period: every `resyncIntervalMs` a node re-broadcasts HELLO,
+     * redoing the discovery handshake — peers reply with STATUS, the node re-derives
+     * its view (fresh DEBATE round) and re-broadcasts SHARE. This re-gathers
+     * perspectives (folding in late joiners / missed updates / healed partitions) and
+     * refreshes liveness. MUST be `< ttlMs`, or TTL would evict healthy members
+     * between resyncs.
+     */
+    resyncIntervalMs: number;
 }
 
 export interface StateSnapshot<Ctx extends Context> {
@@ -69,6 +78,7 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     private steadyDebouncer!: Debouncer;
     private debateDebouncer!: Debouncer;
     private sweepTimer: ReturnType<Clock['setTimer']> | null = null;
+    private resyncTimer: ReturnType<Clock['setTimer']> | null = null;
     private unsub: Unsubscribe | null = null;
     private debatePending: Promise<void> = Promise.resolve();
 
@@ -125,6 +135,7 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
             this.emitSlanError('broadcast', err);
         }
         if (this.sweepTimer !== null) this.clock.clearTimer(this.sweepTimer);
+        if (this.resyncTimer !== null) this.clock.clearTimer(this.resyncTimer);
         this.debateDebouncer.cancel();
         this.steadyDebouncer.cancel();
         this.unsub?.();
@@ -209,9 +220,19 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     private async runDebate(): Promise<void> {
         for (const slot of this.slots.values()) {
             try {
-                const batch = slot.debate.snapshot();
-                slot.internal = await slot.reducer.runStatus(batch, this.ctx(), slot.internal);
-                slot.translated = await slot.reducer.translate(slot.internal, null, this.ctx());
+                // Re-gather BOTH this round's freshly-pulled perspectives (STATUS
+                // replies in the transient DEBATE buffer) AND the retained state data
+                // (peers' last SHARE views in Σ). Converging over the union means a
+                // peer briefly silent for one resync round is held by Σ until its TTL
+                // genuinely lapses, instead of being dropped and re-added every round.
+                const batch = [...slot.debate.snapshot(), ...slot.memory.snapshot().map(([, payload]) => payload)];
+                // Capture the prior state so change detection compares against the
+                // last converged view. DEBATE re-runs on every resync round, so a
+                // null prev would mark every round "changed" and bump versions
+                // (and re-broadcast) needlessly even when membership is unchanged.
+                const prev = slot.internal;
+                slot.internal = await slot.reducer.runStatus(batch, this.ctx(), prev);
+                slot.translated = await slot.reducer.translate(slot.internal, prev, this.ctx());
                 if (slot.translated.changed) slot.outVersion += 1;
                 slot.debate.clear();
             } catch (err) {
@@ -224,7 +245,43 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
             from: this.opts.identity.address,
             payloads: this.composite(),
         });
+        // Enter steady state: start the periodic resync (re-HELLO) so a converged
+        // cluster does not go silent — each round re-gathers peers' STATUS, re-derives
+        // the view, and re-broadcasts SHARE, keeping liveness fresh (TTL only evicts
+        // genuinely-departed nodes) and folding in late joiners / missed updates.
+        // Idempotent across the repeated DEBATE rounds.
+        this.resyncTimer ??= this.clock.setTimer(() => this.resync(), this.opts.config.resyncIntervalMs);
         this.notifyConverged();
+    }
+
+    /**
+     * Periodic resync: re-broadcast HELLO and re-anchor the bounded DEBATE window.
+     * This redoes the discovery handshake — every peer replies with its current
+     * STATUS, which feeds a fresh DEBATE aggregation that re-derives our converged
+     * view and re-broadcasts SHARE. Re-gathering perspectives this way (rather than
+     * pushing our own possibly-stale aggregate) is what makes the protocol
+     * eventually consistent: late joiners, missed updates and healed partitions are
+     * folded in, and the resulting SHARE refreshes our liveness in peers' Σ (via the
+     * MemoryMap equal-version path) so TTL only evicts genuinely-departed nodes.
+     */
+    private resync(): void {
+        // Re-enter DEBATE to re-gather perspectives. If a DEBATE round is already in
+        // flight (state still converging), it already serves the resync — just re-arm.
+        if (this.fsm.phase === Phase.IDLE) {
+            this.fsm.to(Phase.DEBATE);
+            void (async () => {
+                try {
+                    await this.opts.slan.broadcast({ type: MessageType.Hello, from: this.opts.identity.address });
+                } catch (err) {
+                    this.emitSlanError('broadcast', err);
+                }
+            })();
+            // Anchor a fresh DEBATE window to this resync HELLO, mirroring start();
+            // this also guarantees runDebate fires (and returns us to IDLE) even with
+            // no peers replying, so the FSM never gets stuck in DEBATE.
+            this.debateDebouncer.notifyChange();
+        }
+        this.resyncTimer = this.clock.setTimer(() => this.resync(), this.opts.config.resyncIntervalMs);
     }
 
     private triggerAll(): void {

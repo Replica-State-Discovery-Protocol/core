@@ -11,8 +11,9 @@ export enum Phase {
 
 const TRANSITIONS: Record<Phase, Phase[]> = {
     [Phase.INITIAL]: [Phase.DEBATE],
+    // IDLE → DEBATE: a periodic resync re-enters DEBATE to re-gather perspectives.
     [Phase.DEBATE]: [Phase.IDLE],
-    [Phase.IDLE]: [Phase.SHARE, Phase.CLOSE],
+    [Phase.IDLE]: [Phase.DEBATE, Phase.SHARE, Phase.CLOSE],
     [Phase.SHARE]: [Phase.IDLE],
     [Phase.CLOSE]: [Phase.IDLE],
 };
