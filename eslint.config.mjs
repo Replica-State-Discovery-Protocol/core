@@ -1,5 +1,5 @@
 import js from '@eslint/js';
-import prettier from 'eslint-config-prettier';
+import eslintPluginPrettierRecommended from 'eslint-plugin-prettier/recommended';
 import simpleImportSort from 'eslint-plugin-simple-import-sort';
 import unusedImports from 'eslint-plugin-unused-imports';
 import globals from 'globals';
@@ -39,6 +39,11 @@ export default tseslint.config(
         extends: [tseslint.configs.disableTypeChecked],
     },
 
-    // Keep Prettier last so it disables any formatting-related lint rules.
-    prettier,
+    // Keep Prettier last. `eslint-plugin-prettier/recommended` runs Prettier AS an
+    // ESLint rule (formatting violations surface as `prettier/prettier` errors —
+    // visible in-editor and caught by `eslint .`/`--fix`) AND bundles
+    // eslint-config-prettier to switch off any core rule that would conflict. So
+    // ESLint and Prettier both enforce formatting, with Prettier the single source
+    // of style truth (no duplicated/out-of-sync stylistic rules).
+    eslintPluginPrettierRecommended,
 );
