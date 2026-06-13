@@ -14,6 +14,7 @@
 - Tests live under `tests/` mirroring `src/` (e.g. `src/clock/Clock.ts` → `tests/clock/Clock.test.ts`).
 - Run a single test file with: `npx vitest run tests/<path>.test.ts`. Run all: `npm test`. Typecheck: `npm run typecheck`.
 - Commit messages are **Conventional Commits** (commitlint enforces this via husky `commit-msg`). The husky `pre-commit` hook runs lint-staged (eslint --fix + prettier) automatically.
+- **Enums, not string-literal unions.** `MessageType` (`src/domain/message.ts`) and `PipelineStage` (`src/errors.ts`) are string **enums** — `MessageType.Hello`/`Status`/`Share`/`Close` (values `'HELLO'`…) and `PipelineStage.Middleware`/`Guard`/`Interceptor`/`Normalizer`/`Aggregator`/`Translator`. Use enum members everywhere — never raw strings like `'SHARE'`. They are already implemented (Task 1); the compiler rejects raw strings, so convert any literal a later code block still shows.
 
 ---
 
@@ -106,7 +107,12 @@ export interface TranslatedState<V> {
 // src/domain/message.ts
 import type { Address, ReducerName } from './address.js';
 
-export type MessageType = 'HELLO' | 'STATUS' | 'SHARE' | 'CLOSE';
+export enum MessageType {
+    Hello = 'HELLO',
+    Status = 'STATUS',
+    Share = 'SHARE',
+    Close = 'CLOSE',
+}
 
 export interface ReducerPayload {
     value: unknown;
@@ -157,9 +163,18 @@ export class GuardRejected extends RsdpError {}
 
 export class SlanError extends RsdpError {}
 
+export enum PipelineStage {
+    Middleware = 'middleware',
+    Guard = 'guard',
+    Interceptor = 'interceptor',
+    Normalizer = 'normalizer',
+    Aggregator = 'aggregator',
+    Translator = 'translator',
+}
+
 export interface PipelineErrorContext {
     reducer: string;
-    stage: 'middleware' | 'guard' | 'interceptor' | 'normalizer' | 'aggregator' | 'translator';
+    stage: PipelineStage;
     messageType: MessageType;
 }
 
