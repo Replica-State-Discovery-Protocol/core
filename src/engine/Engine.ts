@@ -44,6 +44,10 @@ interface ReducerSlot<Ctx extends Context> {
     queue: RunQueue;
     internal: unknown; // prev S
     translated: TranslatedState<unknown> | null;
+    // Monotonic outbound version, bumped only when this reducer's translated
+    // value actually changes. Decouples wire versioning from the wall clock so
+    // two distinct updates in the same millisecond are never collapsed.
+    outVersion: number;
 }
 
 export interface CreateEngineOptions<Ctx extends Context> {
@@ -78,6 +82,7 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
                 queue: new RunQueue(() => Promise.resolve()),
                 internal: null,
                 translated: null,
+                outVersion: 0,
             };
             slot.queue = new RunQueue(() => this.runShare(slot));
             this.slots.set(r.name, slot);
@@ -195,6 +200,7 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
                 const batch = slot.debate.snapshot();
                 slot.internal = await slot.reducer.runStatus(batch, this.ctx(), slot.internal);
                 slot.translated = await slot.reducer.translate(slot.internal, null, this.ctx());
+                if (slot.translated.changed) slot.outVersion += 1;
                 slot.debate.clear();
             } catch (err) {
                 await this.emitError(slot.reducer, MessageType.Status, err);
@@ -221,6 +227,7 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
             const translated = await slot.reducer.translate(slot.internal, prev, this.ctx());
             slot.translated = translated;
             if (translated.changed) {
+                slot.outVersion += 1;
                 await this.opts.slan.broadcast({
                     type: MessageType.Share,
                     from: this.opts.identity.address,
@@ -245,7 +252,7 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     private composite(): Record<ReducerName, ReducerPayload> {
         const out: Record<ReducerName, ReducerPayload> = {};
         for (const [name, slot] of this.slots) {
-            out[name] = { value: slot.translated?.value ?? null, version: this.clock.now() };
+            out[name] = { value: slot.translated?.value ?? null, version: slot.outVersion };
         }
         return out;
     }
