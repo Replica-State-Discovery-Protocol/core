@@ -10,7 +10,7 @@
 
 `@rsdp/core` is a clean, framework-grade reimplementation of the RSDP engine, extracted from the year-old `workbench/src/core` prototype. The prototype's **fluent chaining API** is kept as the surface; its internals are rebuilt.
 
-This design realises the **authoritative memory-based convergence model** from the protocol docs (`docs/03-protocol-phases/`, `docs/07-state-convergence/`): per-peer memory holding SHARE perspectives, a bounded one-shot DEBATE bootstrap, debounced event-driven aggregation, and TTL eviction — **no periodic resync**.
+This design realises the **authoritative memory-based convergence model** from the protocol docs (`docs/03-protocol-phases/`, `docs/07-state-convergence/`): per-peer memory holding SHARE perspectives, a bounded DEBATE that re-gathers perspectives, debounced event-driven aggregation, and TTL eviction. Because consistency is **eventual**, a converged cluster does not go silent: each node **periodically resyncs** — re-broadcasting `HELLO` to redo the discovery handshake, re-gathering peers' STATUS and re-deriving its view — so liveness stays fresh and late joiners / missed updates / healed partitions are folded in.
 
 Goals: strong end-to-end typing, modular class-based components with real dependency injection, deterministic and fully testable convergence, transport-agnostic core.
 
@@ -29,7 +29,6 @@ Goals: strong end-to-end typing, modular class-based components with real depend
 - Standby consensus (CONSENSUS/FOLLOWER) modes and split routing.
 - Network-management / federation layer.
 - A real transport (`@rsdp/amqp-slan`, separate repo).
-- Automatic re-DEBATE / partition-heal detection (DEBATE runs once at `start()`).
 
 ## 3. Key decisions (with rationale)
 
@@ -59,10 +58,10 @@ src/
   engine/
     Engine.ts             orchestrator: SLAN ↔ memory ↔ debounce ↔ reducers ↔ observer
     memory/MemoryMap.ts   Σ per reducer: update / evict / sweepExpired / snapshot
-    memory/DebateBuffer.ts transient one-shot STATUS buffer (bootstrap only)
+    memory/DebateBuffer.ts transient per-round STATUS buffer (cleared after each DEBATE)
     schedule/Debouncer.ts dual-trigger δ + D_max scheduler (clock-driven)
     schedule/RunQueue.ts  per-reducer single-flight serialized runner
-    phases/Fsm.ts         INITIAL → DEBATE → IDLE(steady) ↔ CLOSE; DEBATE one-shot
+    phases/Fsm.ts         INITIAL → DEBATE → IDLE ↔ DEBATE(resync); IDLE → SHARE/CLOSE
   clock/Clock.ts          injectable Clock (SystemClock + FakeClock)
   testing/InMemorySlan.ts in-process SLAN, exported via "@rsdp/core/testing"
   index.ts                public barrel
@@ -78,7 +77,7 @@ src/
 
 A reducer's **wire payload is its translated view `V`** — that is exactly what the translator produces and what peers exchange. The internal state `S` may be richer than `V`; only `V` crosses the wire and only `V` is what a reducer observes _from peers_. Therefore the per-pipeline raw input types are fixed, not free parameters:
 
-- **STATUS** pipeline raw input: `V[]` (neighbours' views, gathered during the DEBATE bootstrap).
+- **STATUS** pipeline raw input: `V[]` (neighbours' views, gathered each DEBATE round).
 - **SHARE** pipeline raw input: `V[]` (peers' views, in steady state).
 - **CLOSE** pipeline raw input: `Address` (the departed peer).
 
@@ -168,6 +167,7 @@ interface EngineConfig {
     debounce: { delayMs: number; maxWaitMs: number }; // δ and D_max
     ttlMs: number; // θ — per-peer eviction timeout
     sweepIntervalMs: number; // TTL sweep cadence
+    resyncIntervalMs: number; // periodic re-HELLO cadence; MUST be < ttlMs
 }
 
 function createEngine<Ctx>(opts: {
@@ -209,17 +209,17 @@ class MemoryMap<P> {
     sweepExpired(now: number, ttlMs: number): Address[]; // TTL eviction; returns evicted
     snapshot(): ReadonlyArray<readonly [Address, P]>; // immutable pipeline input
 }
-// DebateBuffer<P>: transient Map<Address, P>, alive only during the one-shot bootstrap.
+// DebateBuffer<P>: transient Map<Address, P>, refilled each DEBATE round, cleared after.
 ```
 
 The engine holds `Map<ReducerName, MemoryMap<unknown>>` and `Map<ReducerName, DebateBuffer<unknown>>`.
 
 ### 8.2 Run lifecycle
 
-- **DEBATE (once, on `start()`):** broadcast `HELLO` → incoming `STATUS` fills each reducer's DebateBuffer → a one-shot debounce anchored to the HELLO time fires (`min(now+δ, helloAt+D_max)`) → each reducer's STATUS pipeline runs over its buffer snapshot → `s_i*` → engine broadcasts one composite `SHARE(s_i*)` → buffers dropped → IDLE. An isolated node still fires at `D_max` with only its own state.
+- **DEBATE (on `start()` and on every resync):** broadcast `HELLO` → incoming `STATUS` fills each reducer's DebateBuffer → a debounce anchored to the HELLO time fires (`min(now+δ, helloAt+D_max)`) → each reducer's STATUS pipeline runs over the **union of its DebateBuffer snapshot and its `Σ` snapshot** → `s_i*` → engine broadcasts one composite `SHARE(s_i*)` → buffers dropped → IDLE. Converging over the union (this round's freshly-pulled perspectives **and** retained state data) means a peer briefly silent for one round is held by `Σ` until its TTL genuinely lapses. An isolated node still fires at `D_max` with only its own state. The FSM allows `IDLE → DEBATE` for the recurring rounds; change detection compares against the prior converged state, so an unchanged round does not bump versions.
 - **Steady state (IDLE):** each incoming `SHARE` splits its composite payload and version-gates each reducer's `Σ` slot for `from` → schedules the steady-state debounce → on fire, snapshot each reducer's `Σ` once and enqueue its SHARE pipeline (single-flight) → `s_i'` → translate → observer; if any reducer's `changed`, broadcast one fresh composite `SHARE`.
-- **CLOSE / TTL:** `CLOSE` → `Σ.evict(from)` for every reducer; a periodic sweep (`sweepIntervalMs`, on the clock) calls `sweepExpired`. Any path that actually removes a peer schedules a debounced re-run.
-- **No periodic resync; no automatic re-DEBATE.**
+- **Periodic resync (every `resyncIntervalMs`, while IDLE):** re-broadcast `HELLO` and re-anchor a fresh DEBATE round. This redoes the discovery handshake (peers reply `STATUS`), re-derives the view, and — because the resulting `SHARE` carries the unchanged version when nothing moved — refreshes this node's liveness in every peer's `Σ` (equal-version path, §8.4). A round in flight is not re-entered (the FSM guards `IDLE → DEBATE`). This is the protocol's eventual-consistency mechanism: no node goes silent, so TTL only evicts genuinely-departed peers, and late joiners / missed updates / healed partitions converge.
+- **CLOSE / TTL:** `CLOSE` → `Σ.evict(from)` for every reducer; a periodic sweep (`sweepIntervalMs`, on the clock) calls `sweepExpired` (`θ` must exceed `resyncIntervalMs`, so a live peer is reproven before it could expire). Any path that actually removes a peer schedules a debounced re-run.
 
 ### 8.3 Scheduling primitives
 
@@ -228,7 +228,7 @@ The engine holds `Map<ReducerName, MemoryMap<unknown>>` and `Map<ReducerName, De
 
 ### 8.4 Versioning
 
-Each reducer payload carries a monotonic `version`. `MemoryMap.update` ignores payloads with `version` ≤ the stored one (timestamp breaks ties), so duplicate and out-of-order SHAREs are no-ops.
+Each reducer payload carries a monotonic `version`. `MemoryMap.update` ignores payloads with `version` **<** the stored one (stale/out-of-order — no-op, no liveness refresh). An **equal**-version payload is a periodic resync re-broadcast: it refreshes `lastSeenAt` (keeping the live peer past TTL) but reports no state change, so it triggers no recompute. Only a strictly greater version stores a new payload and reports `changed`.
 
 ## 9. Transport: SLAN port & messages
 
@@ -264,14 +264,14 @@ One message carries every reducer's payload (composite), keyed by reducer name. 
 
 - **Vitest**, deterministic (no real timers/sleeps).
 - **Reducers** tested as pure functions: snapshot in → state out.
-- **Convergence** tested with `InMemorySlan` + `FakeClock`: spin up N in-process nodes on one bus, advance the clock explicitly, assert all nodes converge `stateOf(reducer)`. Cases: δ/D_max coalescing, TTL eviction, CLOSE, duplicate/out-of-order SHARE, isolated-node bootstrap, multi-reducer composite messages.
+- **Convergence** tested with `InMemorySlan` + `FakeClock`: spin up N in-process nodes on one bus, advance the clock explicitly, assert all nodes converge `stateOf(reducer)`. Cases: δ/D_max coalescing, TTL eviction, CLOSE, duplicate/out-of-order SHARE, isolated-node bootstrap, multi-reducer composite messages, periodic resync (members survive past TTL; a Σ peer retained across resync rounds then evicted once TTL lapses).
 - **Reference reducers** (`UnionMembers` / cluster-members, and a cluster-position reducer) double as fixtures and living examples.
 
 ## 12. Mapping to authoritative docs
 
 | Doc                                                                  | Realised by                        |
 | -------------------------------------------------------------------- | ---------------------------------- |
-| `03-protocol-phases` (DEBATE one-shot, SHARE steady, CLOSE eviction) | §8.2 run lifecycle, `Fsm`          |
+| `03-protocol-phases` (DEBATE + periodic resync, SHARE steady, CLOSE) | §8.2 run lifecycle, `Fsm`          |
 | `05-reducer-pipelines` (7-stage pipeline)                            | §6 stages + `Pipeline` runner      |
 | `07-state-convergence/memory-based-convergence` (Σ, δ/D_max, TTL θ)  | §8 `MemoryMap`, `Debouncer`, sweep |
 | `04-layered-architecture` (SLAN port, pluggable carrier)             | §9 `Slan` port + `InMemorySlan`    |
@@ -284,11 +284,11 @@ One message carries every reducer's payload (composite), keyed by reducer name. 
 4. Debounce had no max-wait (could stall) → dual-trigger δ/D_max (§8.3).
 5. Buggy `TimeoutMutex` throwing from a timer → no OS mutex; snapshot + single-flight queue (§8.3, decision 2).
 6. Half-wired phase machine / aggregation bypassing it → explicit lifecycle (§8.2).
-7. Periodic resync → event-driven memory-based convergence (per authoritative docs).
+7. Windowed resync-SESSION → lightweight periodic re-HELLO resync layered on event-driven memory-based convergence (per authoritative docs).
 8. `JSON.stringify` change detection → comparator-based `changed` (§6.3).
 
 ## 14. Open items / deferred
 
 - Real transport (`@rsdp/amqp-slan`) implements the §9 port later.
-- Standby modes, federation, automatic re-DEBATE — future milestones.
+- Standby modes, federation — future milestones.
 - `Context` shape is reducer-defined; the engine threads it through unchanged (carrier/identity data merged in at message receipt).
