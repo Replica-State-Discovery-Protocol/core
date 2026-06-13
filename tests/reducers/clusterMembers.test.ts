@@ -34,7 +34,12 @@ describe('clusterMembersReducer', () => {
             identity: { address: 'node1' },
             slan: new InMemorySlan('node1', new InMemoryBus()),
             reducers: [r],
-            config: { debounce: { delayMs: 10, maxWaitMs: 50 }, ttlMs: 10_000, sweepIntervalMs: 1_000 },
+            config: {
+                debounce: { delayMs: 10, maxWaitMs: 50 },
+                ttlMs: 10_000,
+                sweepIntervalMs: 1_000,
+                resyncIntervalMs: 1_000,
+            },
         });
         // The type of `result` must be TranslatedState<MembersView> | null — verified by the compiler
         // without any `as` cast. If `stateOf` were typed wrong this line would not typecheck.

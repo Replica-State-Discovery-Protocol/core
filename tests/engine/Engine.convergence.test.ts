@@ -20,7 +20,12 @@ const membersReducer = (self: string): Reducer<unknown, V, Context> =>
         .close((p) => p.setAggregator({ aggregate: (b, _c, prev) => (prev ?? []).filter((id) => !b.includes(id)) }))
         .setTranslator({ translate: (state) => ({ value: state, changed: true }) }) as Reducer<unknown, V, Context>;
 
-const cfg = { debounce: { delayMs: 10, maxWaitMs: 50 }, ttlMs: 10_000, sweepIntervalMs: 1_000 };
+const cfg = {
+    debounce: { delayMs: 10, maxWaitMs: 50 },
+    ttlMs: 10_000,
+    sweepIntervalMs: 1_000,
+    resyncIntervalMs: 1_000,
+};
 
 const settleAll = async (clock: FakeClock, engines: { settle(): Promise<void> }[]) => {
     for (let i = 0; i < 10; i++) {

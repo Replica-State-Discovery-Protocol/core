@@ -21,7 +21,12 @@ const reducer = (self: string) =>
         .close((p) => p.setAggregator({ aggregate: (b, _c, prev) => (prev ?? []).filter((id) => !b.includes(id)) }))
         .setTranslator({ translate: (state) => ({ value: state, changed: true }) });
 
-const cfg = { debounce: { delayMs: 10, maxWaitMs: 50 }, ttlMs: 10_000, sweepIntervalMs: 1_000 };
+const cfg = {
+    debounce: { delayMs: 10, maxWaitMs: 50 },
+    ttlMs: 10_000,
+    sweepIntervalMs: 1_000,
+    resyncIntervalMs: 1_000,
+};
 
 describe('Engine DEBATE bootstrap', () => {
     it('broadcasts HELLO on start, then a SHARE after the DEBATE window', async () => {

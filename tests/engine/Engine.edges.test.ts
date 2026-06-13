@@ -20,7 +20,7 @@ const r = (self: string): Reducer<unknown, V, Context> =>
         .share((p) => p.setAggregator(union(self)))
         .close((p) => p.setAggregator({ aggregate: (b, _c, prev) => (prev ?? []).filter((id) => !b.includes(id)) }))
         .setTranslator({ translate: (state) => ({ value: state, changed: true }) }) as Reducer<unknown, V, Context>;
-const cfg = { debounce: { delayMs: 10, maxWaitMs: 50 }, ttlMs: 100, sweepIntervalMs: 20 };
+const cfg = { debounce: { delayMs: 10, maxWaitMs: 50 }, ttlMs: 100, sweepIntervalMs: 20, resyncIntervalMs: 30 };
 
 describe('Engine edge cases', () => {
     it('an isolated node bootstraps to just itself at D_max', async () => {
