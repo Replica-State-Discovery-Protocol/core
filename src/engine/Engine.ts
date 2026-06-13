@@ -148,7 +148,19 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
             case MessageType.Close: {
                 const closed = msg.closed ?? from;
                 let changed = false;
-                for (const slot of this.slots.values()) changed = slot.memory.evict(closed) || changed;
+                for (const slot of this.slots.values()) {
+                    if (!slot.memory.evict(closed)) continue;
+                    changed = true;
+                    // In the full-consensus model a peer's wire payload is its *full*
+                    // translated view, which transitively names the departed node. Those
+                    // payloads are opaque (`unknown`) to the engine, so we cannot scrub the
+                    // departed id from them surgically. Evicting only the departed peer's own
+                    // Σ slot leaves it re-injected via every surviving peer's cached view, so
+                    // it can never be forgotten. Invalidate all cached peer views on a real
+                    // departure; survivors rebuild Σ from their next fresh SHAREs (driven by
+                    // the debounced re-run + re-broadcast).
+                    for (const [addr] of slot.memory.snapshot()) slot.memory.evict(addr);
+                }
                 if (changed) this.steadyDebouncer.notifyChange();
                 return;
             }
@@ -165,6 +177,11 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
         for (const [name, payload] of Object.entries(msg.payloads)) {
             const slot = this.slots.get(name);
             if (!slot) continue;
+            // A peer that has not yet translated a value emits `value: null` in its
+            // composite (e.g. a STATUS reply to HELLO before its DEBATE has run).
+            // Such empty contributions must not be ingested, or `null` leaks into
+            // reducer batches and pollutes the converged state forever.
+            if (payload.value === null) continue;
             // Only treat the message as a real change when the slot actually updated
             // (stale/duplicate SHAREs return false and must NOT trigger a re-run).
             if (apply(slot, payload)) changed = true;
