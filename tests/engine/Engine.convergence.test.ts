@@ -87,4 +87,42 @@ describe('Engine steady-state convergence', () => {
         expect(nodes[1]!.engine.stateOf(nodes[1]!.r)?.value).toEqual(['a', 'b']);
         await Promise.all([nodes[0]!.engine.stop(), nodes[1]!.engine.stop()]);
     });
+
+    it('multiple survivors keep their membership after one node departs', async () => {
+        const bus = new InMemoryBus();
+        const clock = new FakeClock(0);
+        const mk = (id: string) => {
+            const r = membersReducer(id);
+            const engine = createEngine<Context>({
+                identity: { address: id },
+                slan: new InMemorySlan(id, bus),
+                reducers: [r],
+                config: cfg,
+                clock,
+            });
+            return { id, r, engine };
+        };
+        const nodes = [mk('a'), mk('b'), mk('c'), mk('d')];
+        await Promise.all(nodes.map((n) => n.engine.start()));
+        await settleAll(
+            clock,
+            nodes.map((n) => n.engine),
+        );
+        for (const n of nodes) {
+            expect(n.engine.stateOf(n.r)?.value).toEqual(['a', 'b', 'c', 'd']);
+        }
+
+        const survivors = [nodes[0]!, nodes[1]!, nodes[2]!];
+        await nodes[3]!.engine.stop(); // 'd' departs → broadcasts CLOSE
+        await settleAll(
+            clock,
+            survivors.map((n) => n.engine),
+        );
+
+        // The CLOSE invalidate-all rebuild must NOT drop the surviving members.
+        for (const n of survivors) {
+            expect(n.engine.stateOf(n.r)?.value).toEqual(['a', 'b', 'c']);
+        }
+        await Promise.all(survivors.map((n) => n.engine.stop()));
+    });
 });
