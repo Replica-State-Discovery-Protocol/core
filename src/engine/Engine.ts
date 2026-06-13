@@ -5,7 +5,7 @@ import type { Context } from '../domain/context.js';
 import type { ReducerPayload, WireMessage } from '../domain/message.js';
 import { MessageType } from '../domain/message.js';
 import type { TranslatedState } from '../domain/state.js';
-import { PipelineError, PipelineStage, RsdpError } from '../errors.js';
+import { PipelineError, PipelineStage, RsdpError, SlanError } from '../errors.js';
 import type { ExceptionFilter } from '../reducer/pipeline/stages.js';
 import type { Reducer } from '../reducer/Reducer.js';
 import type { Slan, Unsubscribe } from '../slan/Slan.js';
@@ -103,7 +103,11 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
         this.steadyDebouncer = new Debouncer(this.clock, this.opts.config.debounce, () => this.triggerAll());
 
         this.fsm.to(Phase.DEBATE);
-        await this.opts.slan.broadcast({ type: MessageType.Hello, from: this.opts.identity.address });
+        try {
+            await this.opts.slan.broadcast({ type: MessageType.Hello, from: this.opts.identity.address });
+        } catch (err) {
+            this.emitSlanError('broadcast', err);
+        }
         // Anchor the one-shot DEBATE window to the HELLO broadcast.
         this.debateDebouncer.notifyChange();
 
@@ -111,11 +115,15 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     }
 
     async stop(): Promise<void> {
-        await this.opts.slan.broadcast({
-            type: MessageType.Close,
-            from: this.opts.identity.address,
-            closed: this.opts.identity.address,
-        });
+        try {
+            await this.opts.slan.broadcast({
+                type: MessageType.Close,
+                from: this.opts.identity.address,
+                closed: this.opts.identity.address,
+            });
+        } catch (err) {
+            this.emitSlanError('broadcast', err);
+        }
         if (this.sweepTimer !== null) this.clock.clearTimer(this.sweepTimer);
         this.debateDebouncer.cancel();
         this.steadyDebouncer.cancel();
@@ -127,11 +135,15 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
         switch (msg.type) {
             case MessageType.Hello:
                 // Reply with our current view as STATUS (full-consensus mode).
-                await this.opts.slan.sendTo(from, {
-                    type: MessageType.Status,
-                    from: this.opts.identity.address,
-                    payloads: this.composite(),
-                });
+                try {
+                    await this.opts.slan.sendTo(from, {
+                        type: MessageType.Status,
+                        from: this.opts.identity.address,
+                        payloads: this.composite(),
+                    });
+                } catch (err) {
+                    this.emitSlanError('sendTo', err);
+                }
                 return;
             case MessageType.Status:
                 this.ingest(
@@ -283,6 +295,15 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     async settle(): Promise<void> {
         await this.debatePending;
         await Promise.all([...this.slots.values()].map((s) => s.queue.idle()));
+    }
+
+    /** Route a SLAN transport failure to onError instead of letting it float. */
+    private emitSlanError(op: string, err: unknown): void {
+        const wrapped =
+            err instanceof RsdpError
+                ? err
+                : new SlanError(`SLAN ${op} failed: ${err instanceof Error ? err.message : String(err)}`);
+        for (const cb of this.errorCbs) cb(wrapped);
     }
 
     private notifyConverged(): void {
