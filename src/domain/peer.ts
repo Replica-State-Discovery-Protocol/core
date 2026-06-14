@@ -1,5 +1,5 @@
-export interface PeerRecord<P> {
-    payload: P;
+export interface PeerRecord<Payload> {
+    payload: Payload;
     version: number;
     lastSeenAt: number;
 }

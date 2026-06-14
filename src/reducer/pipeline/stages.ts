@@ -1,25 +1,31 @@
 // src/reducer/pipeline/stages.ts
-export type PipelineRun<R, S, Ctx> = (batch: R[], ctx: Ctx, prev: S | null) => Promise<S>;
-export type Aggregate<M, S, Ctx> = (batch: M[], ctx: Ctx, prev: S | null) => Promise<S>;
+//
+// Stage interfaces are parameterised by:
+//   Raw    — the raw element type entering the pipeline (a peer's View, or an Address for CLOSE)
+//   Mapped — the element type after the normalizer (defaults to Raw when none is set)
+//   State  — the reducer's internal converged state
+//   Ctx    — the per-run context
+export type PipelineRun<Raw, State, Ctx> = (batch: Raw[], ctx: Ctx, prev: State | null) => Promise<State>;
+export type Aggregate<Mapped, State, Ctx> = (batch: Mapped[], ctx: Ctx, prev: State | null) => Promise<State>;
 
-export interface Middleware<R, S, Ctx> {
-    wrap(next: PipelineRun<R, S, Ctx>): PipelineRun<R, S, Ctx>;
+export interface Middleware<Raw, State, Ctx> {
+    wrap(next: PipelineRun<Raw, State, Ctx>): PipelineRun<Raw, State, Ctx>;
 }
 
-export interface Guard<R, S, Ctx> {
-    check(batch: R[], ctx: Ctx, prev: S | null): boolean | Promise<boolean>;
+export interface Guard<Raw, State, Ctx> {
+    check(batch: Raw[], ctx: Ctx, prev: State | null): boolean | Promise<boolean>;
 }
 
-export interface Interceptor<M, S, Ctx> {
-    wrap(next: Aggregate<M, S, Ctx>): Aggregate<M, S, Ctx>;
+export interface Interceptor<Mapped, State, Ctx> {
+    wrap(next: Aggregate<Mapped, State, Ctx>): Aggregate<Mapped, State, Ctx>;
 }
 
-export interface Normalizer<R, M, Ctx> {
-    normalize(batch: R[], ctx: Ctx): M[] | Promise<M[]>;
+export interface Normalizer<Raw, Mapped, Ctx> {
+    normalize(batch: Raw[], ctx: Ctx): Mapped[] | Promise<Mapped[]>;
 }
 
-export interface Aggregator<M, S, Ctx> {
-    aggregate(batch: M[], ctx: Ctx, prev: S | null): S | Promise<S>;
+export interface Aggregator<Mapped, State, Ctx> {
+    aggregate(batch: Mapped[], ctx: Ctx, prev: State | null): State | Promise<State>;
 }
 
 export interface ExceptionFilter<Ctx> {

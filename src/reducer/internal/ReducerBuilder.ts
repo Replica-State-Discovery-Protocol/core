@@ -11,33 +11,33 @@ import { type Configure, PipelineBuilder } from './PipelineBuilder.js';
  * Fluent builder behind `defineReducer`. Collects a per-message-type pipeline plus a
  * translator, then validates and assembles them into an immutable {@link Reducer}.
  */
-export class ReducerBuilder<S, V, Ctx extends Context> {
-    private statusB?: PipelineBuilder<V, unknown, S, Ctx>;
-    private shareB?: PipelineBuilder<V, unknown, S, Ctx>;
-    private closeB?: PipelineBuilder<Address, unknown, S, Ctx>;
-    private translator?: Translator<S, V, Ctx>;
+export class ReducerBuilder<State, View, Ctx extends Context> {
+    private statusB?: PipelineBuilder<View, unknown, State, Ctx>;
+    private shareB?: PipelineBuilder<View, unknown, State, Ctx>;
+    private closeB?: PipelineBuilder<Address, unknown, State, Ctx>;
+    private translator?: Translator<State, View, Ctx>;
 
     constructor(private readonly name: ReducerName) {}
 
-    status(fn: Configure<V, S, Ctx>): this {
-        this.statusB = fn(new PipelineBuilder<V, V, S, Ctx>());
+    status(fn: Configure<View, State, Ctx>): this {
+        this.statusB = fn(new PipelineBuilder<View, View, State, Ctx>());
         return this;
     }
-    share(fn: Configure<V, S, Ctx>): this {
-        this.shareB = fn(new PipelineBuilder<V, V, S, Ctx>());
+    share(fn: Configure<View, State, Ctx>): this {
+        this.shareB = fn(new PipelineBuilder<View, View, State, Ctx>());
         return this;
     }
-    close(fn: Configure<Address, S, Ctx>): this {
-        this.closeB = fn(new PipelineBuilder<Address, Address, S, Ctx>());
+    close(fn: Configure<Address, State, Ctx>): this {
+        this.closeB = fn(new PipelineBuilder<Address, Address, State, Ctx>());
         return this;
     }
-    setTranslator(t: Translator<S, V, Ctx>): Reducer<S, V, Ctx> {
+    setTranslator(t: Translator<State, View, Ctx>): Reducer<State, View, Ctx> {
         this.translator = t;
         return this.build();
     }
 
     /** Validate and assemble. Throws ConfigError if anything required is missing. */
-    build(): Reducer<S, V, Ctx> {
+    build(): Reducer<State, View, Ctx> {
         const need = <T>(v: T | undefined, what: string): T => {
             if (v === undefined) throw new ConfigError(`reducer "${this.name}" is missing ${what}`);
             return v;
@@ -56,7 +56,7 @@ export class ReducerBuilder<S, V, Ctx extends Context> {
             if (!b.aggregator) throw new ConfigError(`reducer "${this.name}" ${label} pipeline has no aggregator`);
         }
 
-        return new Reducer<S, V, Ctx>(
+        return new Reducer<State, View, Ctx>(
             this.name,
             new Pipeline(this.name, MessageType.Status, { ...status, aggregator: status.aggregator! }),
             new Pipeline(this.name, MessageType.Share, { ...share, aggregator: share.aggregator! }),

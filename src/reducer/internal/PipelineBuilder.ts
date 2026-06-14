@@ -4,34 +4,35 @@ import type { Aggregator, ExceptionFilter, Guard, Interceptor, Middleware, Norma
 /**
  * Mutable accumulator for one message-type's pipeline. The fluent callback passed to
  * `ReducerBuilder.status/share/close` receives one of these and registers stages on it;
- * `ReducerBuilder.build()` then freezes it into a `Pipeline`.
+ * `ReducerBuilder.build()` then freezes it into a `Pipeline`. Generic over the same
+ * `Raw`/`Mapped`/`State`/`Ctx` parameters as the pipeline stages.
  */
-export class PipelineBuilder<R, M, S, Ctx> {
-    middleware: Middleware<R, S, Ctx>[] = [];
-    guards: Guard<R, S, Ctx>[] = [];
-    interceptors: Interceptor<M, S, Ctx>[] = [];
-    normalizer?: Normalizer<R, M, Ctx>;
-    aggregator?: Aggregator<M, S, Ctx>;
+export class PipelineBuilder<Raw, Mapped, State, Ctx> {
+    middleware: Middleware<Raw, State, Ctx>[] = [];
+    guards: Guard<Raw, State, Ctx>[] = [];
+    interceptors: Interceptor<Mapped, State, Ctx>[] = [];
+    normalizer?: Normalizer<Raw, Mapped, Ctx>;
+    aggregator?: Aggregator<Mapped, State, Ctx>;
     exceptionFilters: ExceptionFilter<Ctx>[] = [];
 
-    addMiddleware(m: Middleware<R, S, Ctx>): this {
+    addMiddleware(m: Middleware<Raw, State, Ctx>): this {
         this.middleware.push(m);
         return this;
     }
-    addGuard(g: Guard<R, S, Ctx>): this {
+    addGuard(g: Guard<Raw, State, Ctx>): this {
         this.guards.push(g);
         return this;
     }
-    addInterceptor(i: Interceptor<M, S, Ctx>): this {
+    addInterceptor(i: Interceptor<Mapped, State, Ctx>): this {
         this.interceptors.push(i);
         return this;
     }
-    setNormalizer<M2>(n: Normalizer<R, M2, Ctx>): PipelineBuilder<R, M2, S, Ctx> {
-        const next = this as unknown as PipelineBuilder<R, M2, S, Ctx>;
+    setNormalizer<NextMapped>(n: Normalizer<Raw, NextMapped, Ctx>): PipelineBuilder<Raw, NextMapped, State, Ctx> {
+        const next = this as unknown as PipelineBuilder<Raw, NextMapped, State, Ctx>;
         next.normalizer = n;
         return next;
     }
-    setAggregator(a: Aggregator<M, S, Ctx>): this {
+    setAggregator(a: Aggregator<Mapped, State, Ctx>): this {
         this.aggregator = a;
         return this;
     }
@@ -42,5 +43,7 @@ export class PipelineBuilder<R, M, S, Ctx> {
 }
 
 /** The configuration callback passed to `ReducerBuilder.status/share/close`. */
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-export type Configure<R, S, Ctx> = (p: PipelineBuilder<R, R, S, Ctx>) => PipelineBuilder<R, any, S, Ctx>;
+export type Configure<Raw, State, Ctx> = (
+    p: PipelineBuilder<Raw, Raw, State, Ctx>,
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+) => PipelineBuilder<Raw, any, State, Ctx>;

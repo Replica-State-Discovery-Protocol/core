@@ -1,8 +1,8 @@
 import type { Address } from '../../domain/address.js';
 import type { PeerRecord } from '../../domain/peer.js';
 
-export class MemoryMap<P> {
-    private readonly records = new Map<Address, PeerRecord<P>>();
+export class MemoryMap<Payload> {
+    private readonly records = new Map<Address, PeerRecord<Payload>>();
 
     /**
      * Version-gated. Returns true iff the stored VALUE changed.
@@ -14,7 +14,7 @@ export class MemoryMap<P> {
      * - `version > existing.version` (or no existing) → store the new payload, refresh
      *   liveness, report a state change (`true`).
      */
-    update(addr: Address, payload: P, version: number, now: number): boolean {
+    update(addr: Address, payload: Payload, version: number, now: number): boolean {
         const existing = this.records.get(addr);
         if (existing) {
             if (version < existing.version) return false;
@@ -47,7 +47,7 @@ export class MemoryMap<P> {
         return evicted;
     }
 
-    snapshot(): readonly (readonly [Address, P])[] {
+    snapshot(): readonly (readonly [Address, Payload])[] {
         return [...this.records.entries()].map(([addr, rec]) => [addr, rec.payload] as const);
     }
 

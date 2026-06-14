@@ -3,33 +3,33 @@ import type { MessageType } from '../../domain/message.js';
 import { GuardRejected } from '../../errors.js';
 import type { Aggregate, Aggregator, Guard, Interceptor, Middleware, Normalizer, PipelineRun } from './stages.js';
 
-export interface PipelineStages<R, M, S, Ctx> {
-    middleware?: Middleware<R, S, Ctx>[];
-    guards?: Guard<R, S, Ctx>[];
-    interceptors?: Interceptor<M, S, Ctx>[];
-    normalizer?: Normalizer<R, M, Ctx>;
-    aggregator: Aggregator<M, S, Ctx>;
+export interface PipelineStages<Raw, Mapped, State, Ctx> {
+    middleware?: Middleware<Raw, State, Ctx>[];
+    guards?: Guard<Raw, State, Ctx>[];
+    interceptors?: Interceptor<Mapped, State, Ctx>[];
+    normalizer?: Normalizer<Raw, Mapped, Ctx>;
+    aggregator: Aggregator<Mapped, State, Ctx>;
 }
 
-export class Pipeline<R, M, S, Ctx> {
+export class Pipeline<Raw, Mapped, State, Ctx> {
     constructor(
         private readonly reducerName: string,
         private readonly messageType: MessageType,
-        private readonly stages: PipelineStages<R, M, S, Ctx>,
+        private readonly stages: PipelineStages<Raw, Mapped, State, Ctx>,
     ) {}
 
-    async run(batch: R[], ctx: Ctx, prev: S | null): Promise<S> {
-        const core: PipelineRun<R, S, Ctx> = async (b, c, p) => {
+    async run(batch: Raw[], ctx: Ctx, prev: State | null): Promise<State> {
+        const core: PipelineRun<Raw, State, Ctx> = async (b, c, p) => {
             for (const guard of this.stages.guards ?? []) {
                 if (!(await guard.check(b, c, p))) {
                     throw new GuardRejected(`guard rejected ${this.reducerName}/${this.messageType}`);
                 }
             }
-            const normalized: M[] = this.stages.normalizer
+            const normalized: Mapped[] = this.stages.normalizer
                 ? await this.stages.normalizer.normalize(b, c)
-                : (b as unknown as M[]);
+                : (b as unknown as Mapped[]);
 
-            let aggregate: Aggregate<M, S, Ctx> = (mb, mc, mp) =>
+            let aggregate: Aggregate<Mapped, State, Ctx> = (mb, mc, mp) =>
                 Promise.resolve(this.stages.aggregator.aggregate(mb, mc, mp));
             for (const interceptor of [...(this.stages.interceptors ?? [])].reverse()) {
                 aggregate = interceptor.wrap(aggregate);

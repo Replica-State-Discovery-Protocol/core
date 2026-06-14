@@ -27,8 +27,8 @@ export class SlotRegistry<Ctx extends Context> {
         return out;
     }
 
-    stateOf<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null {
-        return (this.slots.get(reducer.name)?.state as TranslatedState<V> | undefined) ?? null;
+    stateOf<State, View>(reducer: Reducer<State, View, Ctx>): TranslatedState<View> | null {
+        return (this.slots.get(reducer.name)?.state as TranslatedState<View> | undefined) ?? null;
     }
     stateByName(name: ReducerName): TranslatedState<unknown> | null {
         return this.slots.get(name)?.state ?? null;
@@ -37,8 +37,8 @@ export class SlotRegistry<Ctx extends Context> {
     snapshotView(): StateSnapshot<Ctx> {
         const slots = this.slots;
         return {
-            get<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null {
-                return (slots.get(reducer.name)?.state as TranslatedState<V> | undefined) ?? null;
+            get<State, View>(reducer: Reducer<State, View, Ctx>): TranslatedState<View> | null {
+                return (slots.get(reducer.name)?.state as TranslatedState<View> | undefined) ?? null;
             },
         };
     }

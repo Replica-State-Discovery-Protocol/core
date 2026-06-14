@@ -48,13 +48,13 @@ export interface EngineConfig {
 }
 
 export interface StateSnapshot<Ctx extends Context> {
-    get<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null;
+    get<State, View>(reducer: Reducer<State, View, Ctx>): TranslatedState<View> | null;
 }
 
 export interface Engine<Ctx extends Context> {
     start(): Promise<void>;
     stop(): Promise<void>;
-    stateOf<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null;
+    stateOf<State, View>(reducer: Reducer<State, View, Ctx>): TranslatedState<View> | null;
     stateByName(name: ReducerName): TranslatedState<unknown> | null;
     onConverged(cb: (snapshot: StateSnapshot<Ctx>) => void): Unsubscribe;
     onError(cb: (err: RsdpError) => void): Unsubscribe;
@@ -132,7 +132,7 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
         await this.opts.slan.close(); // close the transport
     }
 
-    stateOf<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null {
+    stateOf<State, View>(reducer: Reducer<State, View, Ctx>): TranslatedState<View> | null {
         return this.registry.stateOf(reducer);
     }
     stateByName(name: ReducerName): TranslatedState<unknown> | null {
