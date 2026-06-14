@@ -65,21 +65,4 @@ describe('SlotRegistry', () => {
         const reg = new SlotRegistry<Context>();
         expect(reg.stateOf(makeReducer('absent'))).toBeNull();
     });
-
-    it('triggerAll fans out to every slot and idleAll awaits them', async () => {
-        const reg = new SlotRegistry<Context>();
-        const runs: string[] = [];
-        for (const name of ['members', 'peers']) {
-            const slot = new ReducerSlot<Context>(makeReducer(name));
-            slot.attachShareRunner(() => {
-                runs.push(name);
-                return Promise.resolve();
-            });
-            reg.add(slot);
-        }
-
-        reg.triggerAll();
-        await reg.idleAll();
-        expect(runs.sort()).toEqual(['members', 'peers']);
-    });
 });

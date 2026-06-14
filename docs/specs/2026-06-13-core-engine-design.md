@@ -33,7 +33,7 @@ Goals: strong end-to-end typing, modular class-based components with real depend
 ## 3. Key decisions (with rationale)
 
 1. **Core-owned `Σ`, reducers are pure functions.** The engine owns all convergence machinery and hands each reducer an immutable snapshot; a reducer is `f(snapshot, ctx, prevState) → state`. Convergence logic is written once; reducers are trivially unit-testable. (Fixes prototype: no per-peer memory existed.)
-2. **Snapshot + per-reducer single-flight run queue; no OS mutex.** Node is single-threaded; the only real hazard is async pipelines interleaving on shared state. We take an immutable `Σ` snapshot per run and serialize runs per reducer. (Fixes prototype: buggy `TimeoutMutex` that threw from a `setTimeout`.)
+2. **Snapshot + single-flight steady run cycle; no OS mutex.** Node is single-threaded; the only real hazard is async pipelines interleaving on shared state. We take an immutable `Σ` snapshot per reducer and serialize the whole steady-state cycle through one `RunQueue`, so overlapping triggers coalesce into one trailing cycle. (Fixes prototype: buggy `TimeoutMutex` that threw from a `setTimeout`.)
 3. **Class-based stages passed as instances.** Stages are classes implementing typed interfaces; the builder accepts configured **instances**, so DI is constructor injection. (Fixes prototype: `new () => T` auto-instantiation blocked DI.)
 4. **Closure-grouped reducer builder.** `defineReducer(...).status(p => …).share(p => …).close(p => …).setTranslator(…)` — groups each pipeline and reads as one expression.
 5. **Typed accessor for engine state (Option C).** Read state by passing the reducer object: `engine.stateOf(reducer): TranslatedState<V>`. Type-safe at point of use, no string-keyed access, simple engine generics, dynamic registration intact. A loose `stateByName()` remains only as an escape hatch. (Fixes prototype: `Record<string, unknown>` erasure + casts.)
@@ -66,7 +66,7 @@ src/
     memory/MemoryMap.ts   Σ per reducer: update / evict / sweepExpired / snapshot
     memory/DebateBuffer.ts transient per-round STATUS buffer (cleared after each DEBATE)
     schedule/Debouncer.ts dual-trigger δ + D_max scheduler (clock-driven)
-    schedule/RunQueue.ts  per-reducer single-flight serialized runner
+    schedule/RunQueue.ts  single-flight serialized runner (drives the one steady convergence cycle)
     phases/Fsm.ts         INITIAL → DEBATE → IDLE ↔ DEBATE(resync); IDLE → SHARE/CLOSE
   clock/Clock.ts          injectable Clock (SystemClock + FakeClock)
   testing/InMemorySlan.ts in-process SLAN, exported via "@rsdp/core/testing"
@@ -75,7 +75,7 @@ src/
 
 ## 5. Engine ↔ reducer contract
 
-- The **engine** owns, per reducer: one `MemoryMap` (Σ over peers) and one `DebateBuffer`; plus the shared `Debouncer`, `RunQueue` (per reducer), TTL sweep, snapshotting.
+- The **engine** owns, per reducer: one `MemoryMap` (Σ over peers) and one `DebateBuffer`; plus the shared `Debouncer`, a single steady-cycle `RunQueue`, TTL sweep, snapshotting.
 - A **reducer** is pure: it receives an immutable snapshot of the relevant peer payloads + `ctx` + `prevState`, returns new state, which the translator condenses to a wire value + `changed` flag.
 - The pipeline's "raw message batch" **is** the current snapshot of non-evicted peer payloads — unifying the docs' pipeline model with the memory-map model.
 
@@ -223,14 +223,14 @@ The engine holds `Map<ReducerName, MemoryMap<unknown>>` and `Map<ReducerName, De
 ### 8.2 Run lifecycle
 
 - **DEBATE (on `start()` and on every resync):** broadcast `HELLO` → incoming `STATUS` fills each reducer's DebateBuffer → a debounce anchored to the HELLO time fires (`min(now+δ, helloAt+D_max)`) → each reducer's STATUS pipeline runs over the **union of its DebateBuffer snapshot and its `Σ` snapshot** → `s_i*` → engine broadcasts one composite `SHARE(s_i*)` → buffers dropped → IDLE. Converging over the union (this round's freshly-pulled perspectives **and** retained state data) means a peer briefly silent for one round is held by `Σ` until its TTL genuinely lapses. An isolated node still fires at `D_max` with only its own state. The FSM allows `IDLE → DEBATE` for the recurring rounds; change detection compares against the prior converged state, so an unchanged round does not bump versions.
-- **Steady state (IDLE):** each incoming `SHARE` splits its composite payload and version-gates each reducer's `Σ` slot for `from` → schedules the steady-state debounce → on fire, snapshot each reducer's `Σ` once and enqueue its SHARE pipeline (single-flight) → `s_i'` → translate → observer; if any reducer's `changed`, broadcast one fresh composite `SHARE`.
+- **Steady state (IDLE):** each incoming `SHARE` splits its composite payload and version-gates each reducer's `Σ` slot for `from` → schedules the steady-state debounce → on fire, one single-flight cycle recomputes **every** reducer over its `Σ` snapshot → `s_i'` → translate; if **any** reducer's view `changed`, the engine broadcasts exactly **one** fresh composite `SHARE` (messaging is engine-level, never per reducer), then notifies the observer once.
 - **Periodic resync (every `resyncIntervalMs`, while IDLE):** re-broadcast `HELLO` and re-anchor a fresh DEBATE round. This redoes the discovery handshake (peers reply `STATUS`), re-derives the view, and — because the resulting `SHARE` carries the unchanged version when nothing moved — refreshes this node's liveness in every peer's `Σ` (equal-version path, §8.4). A round in flight is not re-entered (the FSM guards `IDLE → DEBATE`). This is the protocol's eventual-consistency mechanism: no node goes silent, so TTL only evicts genuinely-departed peers, and late joiners / missed updates / healed partitions converge.
 - **CLOSE / TTL:** `CLOSE` → `Σ.evict(from)` for every reducer; a periodic sweep (`sweepIntervalMs`, on the clock) calls `sweepExpired` (`θ` must exceed `resyncIntervalMs`, so a live peer is reproven before it could expire). Any path that actually removes a peer schedules a debounced re-run.
 
 ### 8.3 Scheduling primitives
 
 - **`Debouncer`** — dual trigger: fires at `min(now + δ, firstChangeAt + D_max)`, driven by the injected `Clock`. Prevents both thrash (δ coalescing) and indefinite stall (D_max cap — the prototype lacked this).
-- **`RunQueue` (per reducer)** — single-flight. A trigger arriving mid-run sets a dirty flag; exactly one follow-up run is scheduled after the current completes, guaranteeing a clean `prevState → state` handoff over a consistent snapshot.
+- **`RunQueue` (one steady cycle)** — single-flight. A trigger arriving mid-run sets a dirty flag; exactly one follow-up cycle is scheduled after the current completes, guaranteeing a clean `prevState → state` handoff over a consistent snapshot and coalescing bursts into a single composite SHARE.
 
 ### 8.4 Versioning
 

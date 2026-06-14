@@ -20,7 +20,9 @@ export class Debouncer {
         const now = this.clock.now();
         this.firstChangeAt ??= now;
         const deadline = Math.min(now + this.config.delayMs, this.firstChangeAt + this.config.maxWaitMs);
+
         if (this.timer !== null) this.clock.clearTimer(this.timer);
+
         this.timer = this.clock.setTimer(() => this.fire(), Math.max(0, deadline - now));
     }
 

@@ -5,20 +5,19 @@ import type { TranslatedState } from '../../domain/state.js';
 import type { Reducer } from '../../reducer/Reducer.js';
 import { DebateBuffer } from '../memory/DebateBuffer.js';
 import { MemoryMap } from '../memory/MemoryMap.js';
-import { RunQueue } from '../schedule/RunQueue.js';
 
 /**
  * Owns one reducer's convergence state: the per-peer SHARE memory `Σ`, the transient
- * DEBATE buffer, a single-flight run queue, the last derived view, and a monotonic
- * outbound version (bumped only when the derived value actually changes — decoupling
- * wire versioning from the wall clock). The cross-slot SHARE broadcast stays with the
- * orchestrator; this class only derives its own slice of the composite state.
+ * DEBATE buffer, the last derived view, and a monotonic outbound version (bumped only
+ * when the derived value actually changes — decoupling wire versioning from the wall
+ * clock). Pure state-derivation: it produces only its own slice of the composite. All
+ * lifecycle/messaging (run scheduling, the single composite SHARE broadcast) lives in
+ * the engine; a slot never emits a message of its own.
  */
 export class ReducerSlot<Ctx extends Context> {
     private readonly memory = new MemoryMap<unknown>();
     private readonly debate = new DebateBuffer<unknown>();
 
-    private queue = new RunQueue(() => Promise.resolve());
     private internal: unknown = null; // prev S
     private translated: TranslatedState<unknown> | null = null;
     private outVersion = 0;
@@ -34,17 +33,6 @@ export class ReducerSlot<Ctx extends Context> {
     /** This slot's entry in a composite wire message. */
     toPayload(): ReducerPayload {
         return { value: this.translated?.value ?? null, version: this.outVersion };
-    }
-
-    /** Bind the single-flight task this slot's steady-state queue runs. */
-    attachShareRunner(run: () => Promise<void>): void {
-        this.queue = new RunQueue(run);
-    }
-    trigger(): void {
-        this.queue.trigger();
-    }
-    idle(): Promise<void> {
-        return this.queue.idle();
     }
 
     /** STATUS contribution → transient DEBATE buffer. Always a candidate change. */

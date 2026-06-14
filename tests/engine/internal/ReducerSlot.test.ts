@@ -82,16 +82,4 @@ describe('ReducerSlot', () => {
         expect(s.sweep(1400, 600)).toBe(false); // 1400 - 1000 = 400 < 600, still alive
         expect(s.sweep(1700, 600)).toBe(true); // 1700 - 1000 = 700 >= 600, evicted
     });
-
-    it('attachShareRunner wires the single-flight steady-state task', async () => {
-        const s = slot();
-        let runs = 0;
-        s.attachShareRunner(() => {
-            runs += 1;
-            return Promise.resolve();
-        });
-        s.trigger();
-        await s.idle();
-        expect(runs).toBe(1);
-    });
 });

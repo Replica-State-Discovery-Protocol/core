@@ -42,11 +42,4 @@ export class SlotRegistry<Ctx extends Context> {
             },
         };
     }
-
-    triggerAll(): void {
-        for (const slot of this.slots.values()) slot.trigger();
-    }
-    async idleAll(): Promise<void> {
-        await Promise.all([...this.slots.values()].map((s) => s.idle()));
-    }
 }

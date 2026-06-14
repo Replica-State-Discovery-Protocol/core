@@ -15,6 +15,7 @@ import { SlotRegistry } from './internal/SlotRegistry.js';
 import { Fsm, Phase } from './phases/Fsm.js';
 import type { DebounceConfig } from './schedule/Debouncer.js';
 import { Debouncer } from './schedule/Debouncer.js';
+import { RunQueue } from './schedule/RunQueue.js';
 
 export interface EngineConfig {
     /**
@@ -97,14 +98,17 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     private unsub: Unsubscribe | null = null;
     private debatePending: Promise<void> = Promise.resolve();
 
+    // One single-flight cycle for all steady-state work: recompute every reducer over
+    // its Σ, then emit at most ONE composite SHARE. Messaging is an engine-level
+    // concern — never per reducer — so N changed reducers still produce one broadcast.
+    private readonly steadyQueue = new RunQueue(() => this.runSteady());
+
     constructor(private readonly opts: CreateEngineOptions<Ctx>) {
         this.clock = opts.clock ?? new SystemClock();
         this.outbound = new OutboundChannel(opts.slan, opts.identity.address, this.errors);
 
         for (const r of opts.reducers) {
-            const slot = new ReducerSlot<Ctx>(r as Reducer<unknown, unknown, Ctx>);
-            slot.attachShareRunner(() => this.onSlotShare(slot));
-            this.registry.add(slot);
+            this.registry.add(new ReducerSlot<Ctx>(r as Reducer<unknown, unknown, Ctx>));
         }
     }
 
@@ -119,7 +123,7 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
         this.debateDebouncer = new Debouncer(this.clock, this.opts.config.debounce, () => {
             this.debatePending = this.runDebate();
         });
-        this.steadyDebouncer = new Debouncer(this.clock, this.opts.config.debounce, () => this.registry.triggerAll());
+        this.steadyDebouncer = new Debouncer(this.clock, this.opts.config.debounce, () => this.steadyQueue.trigger());
 
         this.fsm.to(Phase.DEBATE);
         await this.outbound.hello();
@@ -226,14 +230,22 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
         this.resyncTimer = this.clock.setTimer(() => this.resync(), this.opts.config.resyncIntervalMs);
     }
 
-    /** Single-flight steady-state run for one slot; broadcasts the composite on change. */
-    private async onSlotShare(slot: ReducerSlot<Ctx>): Promise<void> {
-        try {
-            if (await slot.runShare(this.ctx())) await this.outbound.share(this.registry.composite());
-            this.notifyConverged();
-        } catch (err) {
-            await this.errors.emitPipeline(slot.reducer, MessageType.Share, err, this.ctx());
+    /**
+     * One steady-state convergence cycle: recompute every reducer over its current Σ,
+     * then emit a SINGLE composite SHARE if any reducer's view changed (mirroring
+     * runDebate). Run-queued so overlapping triggers coalesce into one trailing cycle.
+     */
+    private async runSteady(): Promise<void> {
+        let changed = false;
+        for (const slot of this.registry.values()) {
+            try {
+                if (await slot.runShare(this.ctx())) changed = true;
+            } catch (err) {
+                await this.errors.emitPipeline(slot.reducer, MessageType.Share, err, this.ctx());
+            }
         }
+        if (changed) await this.outbound.share(this.registry.composite());
+        this.notifyConverged();
     }
 
     private sweep(): void {
@@ -259,7 +271,7 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     }
     async settle(): Promise<void> {
         await this.debatePending;
-        await this.registry.idleAll();
+        await this.steadyQueue.idle();
     }
 
     private notifyConverged(): void {
