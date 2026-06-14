@@ -94,7 +94,7 @@ describe('Coordinator', () => {
         expect(slan.count(MessageType.Share)).toBe(1);
         expect(snaps.length).toBeGreaterThanOrEqual(1);
 
-        coordinator.stop();
+        await coordinator.stop();
     });
 
     it('scheduleSteady recomputes over Σ and broadcasts one SHARE on change', async () => {
@@ -110,7 +110,7 @@ describe('Coordinator', () => {
         expect(registry.stateOf(r)?.value).toEqual(['a', 'peer']);
         expect(slan.count(MessageType.Share) - sharesBefore).toBe(1);
 
-        coordinator.stop();
+        await coordinator.stop();
     });
 
     it('periodically resyncs by re-broadcasting HELLO', async () => {
@@ -125,7 +125,7 @@ describe('Coordinator', () => {
 
         expect(slan.count(MessageType.Hello)).toBeGreaterThan(helloBefore);
 
-        coordinator.stop();
+        await coordinator.stop();
     });
 
     it('onConverged unsubscribe stops further notifications', async () => {
@@ -145,6 +145,6 @@ describe('Coordinator', () => {
         await drain(clock, coordinator);
         expect(calls).toBe(afterStart); // no more after unsubscribe
 
-        coordinator.stop();
+        await coordinator.stop();
     });
 });

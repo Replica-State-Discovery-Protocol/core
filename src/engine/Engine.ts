@@ -124,13 +124,12 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     }
 
     async stop(): Promise<void> {
-        await this.outbound.close();
+        this.unsub?.(); // stop accepting inbound → no new phase requests during teardown
+        this.sweeper.stop(); // stop TTL-driven triggers
 
-        this.sweeper.stop();
-        this.coordinator.stop();
-        this.unsub?.();
-
-        await this.opts.slan.close();
+        await this.coordinator.stop(); // cancel future windows + drain the in-flight phase
+        await this.outbound.close(); // announce our departure (CLOSE)
+        await this.opts.slan.close(); // close the transport
     }
 
     stateOf<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null {

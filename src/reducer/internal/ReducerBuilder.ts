@@ -42,10 +42,12 @@ export class ReducerBuilder<S, V, Ctx extends Context> {
             if (v === undefined) throw new ConfigError(`reducer "${this.name}" is missing ${what}`);
             return v;
         };
+
         const status = need(this.statusB, 'a STATUS pipeline');
         const share = need(this.shareB, 'a SHARE pipeline');
         const close = need(this.closeB, 'a CLOSE pipeline');
         const translator = need(this.translator, 'a translator');
+
         for (const [b, label] of [
             [status, MessageType.Status],
             [share, MessageType.Share],
@@ -53,6 +55,7 @@ export class ReducerBuilder<S, V, Ctx extends Context> {
         ] as const) {
             if (!b.aggregator) throw new ConfigError(`reducer "${this.name}" ${label} pipeline has no aggregator`);
         }
+
         return new Reducer<S, V, Ctx>(
             this.name,
             new Pipeline(this.name, MessageType.Status, { ...status, aggregator: status.aggregator! }),

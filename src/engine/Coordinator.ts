@@ -78,10 +78,18 @@ export class Coordinator<Ctx extends Context> {
         this.resyncTimer = this.clock.setTimer(() => void this.resync(), this.resyncIntervalMs);
     }
 
-    stop(): void {
+    /**
+     * Tear down: stop the periodic resync and cancel every pending/armed phase window,
+     * then await the in-flight phase (if any) so shutdown is graceful — the current
+     * aggregation finishes and emits its final SHARE rather than being abandoned. Async to
+     * mirror {@link start}; `scheduler.stop()` first guarantees `settle()` only waits on
+     * work already running, never on newly-armed windows.
+     */
+    async stop(): Promise<void> {
         if (this.resyncTimer !== null) this.clock.clearTimer(this.resyncTimer);
 
         this.scheduler.stop();
+        await this.scheduler.settle();
     }
 
     /** Poke a DEBATE round (incoming STATUS gathered). */
@@ -129,28 +137,6 @@ export class Coordinator<Ctx extends Context> {
     }
 
     /**
-     * Periodic resync: re-broadcast HELLO and request a DEBATE round, redoing the
-     * discovery handshake so peers reply with STATUS and we re-derive our view.
-     * Re-gathering perspectives (rather than pushing our possibly-stale aggregate) is what
-     * makes the protocol eventually consistent; the resulting SHARE refreshes our liveness
-     * in peers' Σ. If a DEBATE is already scheduled (window open, queued, or running) it
-     * already serves the resync — skip rather than stack a second HELLO. The timer always
-     * re-arms, so a round deferred behind other work is retried, never silently dropped.
-     *
-     * The returned promise is awaited by nothing (the timer discards it); it is `async`
-     * only so the HELLO broadcast is genuinely awaited. The periodic timer is re-armed
-     * synchronously, up front, so its cadence never depends on the broadcast resolving.
-     */
-    private async resync(): Promise<void> {
-        this.resyncTimer = this.clock.setTimer(() => void this.resync(), this.resyncIntervalMs);
-
-        if (!this.scheduler.isScheduled(Phase.DEBATE)) {
-            await this.outbound.hello();
-            this.scheduler.request(Phase.DEBATE);
-        }
-    }
-
-    /**
      * Steady-state round: recompute every reducer over its current Σ, then emit a single
      * composite SHARE if any reducer's view changed.
      */
@@ -183,6 +169,28 @@ export class Coordinator<Ctx extends Context> {
         }
         if (changed) await this.outbound.share(this.registry.composite());
         this.notifyConverged();
+    }
+
+    /**
+     * Periodic resync: re-broadcast HELLO and request a DEBATE round, redoing the
+     * discovery handshake so peers reply with STATUS and we re-derive our view.
+     * Re-gathering perspectives (rather than pushing our possibly-stale aggregate) is what
+     * makes the protocol eventually consistent; the resulting SHARE refreshes our liveness
+     * in peers' Σ. If a DEBATE is already scheduled (window open, queued, or running) it
+     * already serves the resync — skip rather than stack a second HELLO. The timer always
+     * re-arms, so a round deferred behind other work is retried, never silently dropped.
+     *
+     * The returned promise is awaited by nothing (the timer discards it); it is `async`
+     * only so the HELLO broadcast is genuinely awaited. The periodic timer is re-armed
+     * synchronously, up front, so its cadence never depends on the broadcast resolving.
+     */
+    private async resync(): Promise<void> {
+        this.resyncTimer = this.clock.setTimer(() => void this.resync(), this.resyncIntervalMs);
+
+        if (!this.scheduler.isScheduled(Phase.DEBATE)) {
+            await this.outbound.hello();
+            this.scheduler.request(Phase.DEBATE);
+        }
     }
 
     private notifyConverged(): void {

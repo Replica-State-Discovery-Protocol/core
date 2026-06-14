@@ -42,6 +42,7 @@ export class Reducer<S, V, Ctx extends Context> {
     runClose(batch: Address[], ctx: Ctx, prev: S | null): Promise<S> {
         return this.closePipe.run(batch, ctx, prev);
     }
+
     translate(state: S | null, prev: S | null, ctx: Ctx): Promise<TranslatedState<V>> {
         return Promise.resolve(this.translator.translate(state, prev, ctx));
     }
