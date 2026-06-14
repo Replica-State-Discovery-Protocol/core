@@ -16,6 +16,11 @@ export class Debouncer {
         private readonly onFire: () => void,
     ) {}
 
+    /** Whether a fire is currently armed (a change is awaiting its quiet-gap / cap). */
+    get armed(): boolean {
+        return this.timer !== null;
+    }
+
     notifyChange(): void {
         const now = this.clock.now();
         this.firstChangeAt ??= now;

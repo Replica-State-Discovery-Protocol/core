@@ -31,6 +31,10 @@ export class MemoryMap<P> {
         return this.records.delete(addr);
     }
 
+    has(addr: Address): boolean {
+        return this.records.has(addr);
+    }
+
     /** Remove peers unseen for >= ttlMs. Returns the evicted addresses. */
     sweepExpired(now: number, ttlMs: number): Address[] {
         const evicted: Address[] = [];

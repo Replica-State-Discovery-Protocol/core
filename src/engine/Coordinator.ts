@@ -7,9 +7,8 @@ import type { ErrorChannel } from './channels/ErrorChannel.js';
 import type { OutboundChannel } from './channels/OutboundChannel.js';
 import type { StateSnapshot } from './Engine.js';
 import type { DebounceConfig } from './schedule/Debouncer.js';
-import { Debouncer } from './schedule/Debouncer.js';
-import { Fsm, Phase } from './schedule/Fsm.js';
-import { RunQueue } from './schedule/RunQueue.js';
+import { Phase } from './schedule/Fsm.js';
+import { PhaseScheduler } from './schedule/PhaseScheduler.js';
 import type { SlotRegistry } from './state/SlotRegistry.js';
 
 export interface CoordinatorOptions<Ctx extends Context> {
@@ -24,11 +23,13 @@ export interface CoordinatorOptions<Ctx extends Context> {
 }
 
 /**
- * Drives the convergence lifecycle: the bootstrap DEBATE, steady-state recompute, and
- * the periodic resync. Owns the debouncers, the single steady run queue, the FSM and
- * the resync timer; emits one composite SHARE per cycle and notifies converged
- * observers. The engine pokes it via `scheduleDebate()`/`scheduleSteady()` — inbound
- * message parsing lives in {@link InboundRouter}, not here.
+ * Drives the convergence lifecycle: the bootstrap DEBATE, steady-state recompute, the
+ * departure CLOSE, and the periodic resync. It owns the {@link PhaseScheduler} (which
+ * gates and serializes all phase work) and the resync timer; each phase handler emits at
+ * most one composite SHARE and notifies converged observers. The engine pokes it via
+ * `scheduleDebate()`/`scheduleSteady()`/`scheduleClose()` — inbound message parsing lives
+ * in {@link InboundRouter}, not here. The handlers never touch the FSM directly; the
+ * scheduler transitions into a phase before invoking the handler and back to IDLE after.
  */
 export class Coordinator<Ctx extends Context> {
     private readonly clock: Clock;
@@ -39,14 +40,10 @@ export class Coordinator<Ctx extends Context> {
     private readonly resyncIntervalMs: number;
     private readonly observer?: ((snapshot: StateSnapshot<Ctx>) => void) | undefined;
 
-    private readonly fsm = new Fsm();
-    private readonly debateDebouncer: Debouncer;
-    private readonly steadyDebouncer: Debouncer;
-    private readonly steadyQueue = new RunQueue(() => this.runSteady());
+    private readonly scheduler: PhaseScheduler;
     private readonly convergedCbs = new Set<(s: StateSnapshot<Ctx>) => void>();
 
     private resyncTimer: ReturnType<Clock['setTimer']> | null = null;
-    private debatePending: Promise<void> = Promise.resolve();
 
     constructor(opts: CoordinatorOptions<Ctx>) {
         this.clock = opts.clock;
@@ -57,32 +54,47 @@ export class Coordinator<Ctx extends Context> {
         this.resyncIntervalMs = opts.resyncIntervalMs;
         this.observer = opts.observer;
 
-        this.debateDebouncer = new Debouncer(this.clock, opts.debounce, () => {
-            this.debatePending = this.runDebate();
+        this.scheduler = new PhaseScheduler({
+            clock: this.clock,
+            debounce: opts.debounce,
+            handlers: {
+                [Phase.DEBATE]: () => this.runDebate(),
+                [Phase.SHARE]: () => this.runSteady(),
+                [Phase.CLOSE]: () => this.runClose(),
+            },
         });
-        this.steadyDebouncer = new Debouncer(this.clock, opts.debounce, () => this.steadyQueue.trigger());
     }
 
-    /** Bootstrap: announce via HELLO and anchor the first DEBATE window to it. */
+    /**
+     * Bootstrap: announce via HELLO and request the first DEBATE round (the scheduler
+     * debounces it into a window so STATUS replies are gathered first). Arm the periodic
+     * resync so a converged cluster does not go silent.
+     */
     async start(): Promise<void> {
-        this.fsm.to(Phase.DEBATE);
         await this.outbound.hello();
-        this.debateDebouncer.notifyChange();
+
+        this.scheduler.request(Phase.DEBATE);
+
+        this.resyncTimer = this.clock.setTimer(() => void this.resync(), this.resyncIntervalMs);
     }
 
     stop(): void {
         if (this.resyncTimer !== null) this.clock.clearTimer(this.resyncTimer);
-        this.debateDebouncer.cancel();
-        this.steadyDebouncer.cancel();
+
+        this.scheduler.stop();
     }
 
     /** Poke a DEBATE round (incoming STATUS gathered). */
     scheduleDebate(): void {
-        this.debateDebouncer.notifyChange();
+        this.scheduler.request(Phase.DEBATE);
     }
-    /** Poke a steady-state recompute (Σ changed via SHARE / CLOSE / TTL). */
+    /** Poke a steady-state recompute (Σ changed via SHARE / TTL sweep). */
     scheduleSteady(): void {
-        this.steadyDebouncer.notifyChange();
+        this.scheduler.request(Phase.SHARE);
+    }
+    /** Poke a departure CLOSE round (a peer's CLOSE was buffered). */
+    scheduleClose(): void {
+        this.scheduler.request(Phase.CLOSE);
     }
 
     onConverged(cb: (s: StateSnapshot<Ctx>) => void): Unsubscribe {
@@ -90,16 +102,20 @@ export class Coordinator<Ctx extends Context> {
         return () => this.convergedCbs.delete(cb);
     }
 
-    /** Resolve once the in-flight DEBATE and all steady-state runs are idle. */
-    async settle(): Promise<void> {
-        await this.debatePending;
-        await this.steadyQueue.idle();
+    /** Resolve once no phase is executing (test/operational aid). */
+    settle(): Promise<void> {
+        return this.scheduler.settle();
     }
 
     private ctx(): Ctx {
         return { self: this.self } as Ctx;
     }
 
+    /**
+     * DEBATE round: re-derive every reducer over the union of its STATUS buffer and Σ,
+     * then always emit one composite SHARE — even when unchanged, so the broadcast
+     * refreshes our liveness in peers' Σ (bootstrap and every resync run through here).
+     */
     private async runDebate(): Promise<void> {
         for (const slot of this.registry.values()) {
             try {
@@ -108,38 +124,35 @@ export class Coordinator<Ctx extends Context> {
                 await this.errors.emitPipeline(slot.reducer, MessageType.Status, err, this.ctx());
             }
         }
-        this.fsm.to(Phase.IDLE);
         await this.outbound.share(this.registry.composite());
-        // Enter steady state: start the periodic resync (re-HELLO) so a converged
-        // cluster does not go silent — each round re-gathers peers' STATUS, re-derives
-        // the view, and re-broadcasts SHARE, keeping liveness fresh (TTL only evicts
-        // genuinely-departed nodes) and folding in late joiners / missed updates.
-        this.resyncTimer ??= this.clock.setTimer(() => this.resync(), this.resyncIntervalMs);
         this.notifyConverged();
     }
 
     /**
-     * Periodic resync: re-broadcast HELLO and re-anchor the bounded DEBATE window,
-     * redoing the discovery handshake so peers reply with STATUS and we re-derive our
-     * view. Re-gathering perspectives (rather than pushing our possibly-stale aggregate)
-     * is what makes the protocol eventually consistent; the resulting SHARE refreshes
-     * our liveness in peers' `Σ` so TTL only evicts genuinely-departed nodes.
+     * Periodic resync: re-broadcast HELLO and request a DEBATE round, redoing the
+     * discovery handshake so peers reply with STATUS and we re-derive our view.
+     * Re-gathering perspectives (rather than pushing our possibly-stale aggregate) is what
+     * makes the protocol eventually consistent; the resulting SHARE refreshes our liveness
+     * in peers' Σ. If a DEBATE is already scheduled (window open, queued, or running) it
+     * already serves the resync — skip rather than stack a second HELLO. The timer always
+     * re-arms, so a round deferred behind other work is retried, never silently dropped.
+     *
+     * The returned promise is awaited by nothing (the timer discards it); it is `async`
+     * only so the HELLO broadcast is genuinely awaited. The periodic timer is re-armed
+     * synchronously, up front, so its cadence never depends on the broadcast resolving.
      */
-    private resync(): void {
-        // Re-enter DEBATE to re-gather perspectives. If a DEBATE round is already in
-        // flight (state still converging), it already serves the resync — just re-arm.
-        if (this.fsm.phase === Phase.IDLE) {
-            this.fsm.to(Phase.DEBATE);
-            void this.outbound.hello();
-            this.debateDebouncer.notifyChange();
+    private async resync(): Promise<void> {
+        this.resyncTimer = this.clock.setTimer(() => void this.resync(), this.resyncIntervalMs);
+
+        if (!this.scheduler.isScheduled(Phase.DEBATE)) {
+            await this.outbound.hello();
+            this.scheduler.request(Phase.DEBATE);
         }
-        this.resyncTimer = this.clock.setTimer(() => this.resync(), this.resyncIntervalMs);
     }
 
     /**
-     * One steady-state convergence cycle: recompute every reducer over its current Σ,
-     * then emit a SINGLE composite SHARE if any reducer's view changed (mirroring
-     * runDebate). Run-queued so overlapping triggers coalesce into one trailing cycle.
+     * Steady-state round: recompute every reducer over its current Σ, then emit a single
+     * composite SHARE if any reducer's view changed.
      */
     private async runSteady(): Promise<void> {
         let changed = false;
@@ -148,6 +161,24 @@ export class Coordinator<Ctx extends Context> {
                 if (await slot.runShare(this.ctx())) changed = true;
             } catch (err) {
                 await this.errors.emitPipeline(slot.reducer, MessageType.Share, err, this.ctx());
+            }
+        }
+        if (changed) await this.outbound.share(this.registry.composite());
+        this.notifyConverged();
+    }
+
+    /**
+     * CLOSE round: run every reducer's close pipeline over its buffered departures
+     * (removing them from the derived view and evicting their Σ slots), then emit a single
+     * composite SHARE if any view changed.
+     */
+    private async runClose(): Promise<void> {
+        let changed = false;
+        for (const slot of this.registry.values()) {
+            try {
+                if (await slot.runClose(this.ctx())) changed = true;
+            } catch (err) {
+                await this.errors.emitPipeline(slot.reducer, MessageType.Close, err, this.ctx());
             }
         }
         if (changed) await this.outbound.share(this.registry.composite());

@@ -11,15 +11,16 @@ import type { SlotRegistry } from './state/SlotRegistry.js';
 export interface ConvergenceScheduler {
     scheduleDebate(): void;
     scheduleSteady(): void;
+    scheduleClose(): void;
 }
 
 /**
  * Routes inbound wire messages to state updates and replies, then pokes convergence —
  * no convergence math of its own:
  * - HELLO  → reply with our composite view as STATUS
- * - STATUS → fill each reducer's DEBATE buffer  → scheduleDebate
- * - SHARE  → version-gate each reducer's Σ slot  → scheduleSteady
- * - CLOSE  → evict the departed peer             → scheduleSteady
+ * - STATUS → fill each reducer's DEBATE buffer    → scheduleDebate
+ * - SHARE  → version-gate each reducer's Σ slot    → scheduleSteady
+ * - CLOSE  → buffer the departed peer per reducer  → scheduleClose
  */
 export class InboundRouter<Ctx extends Context> {
     constructor(
@@ -51,9 +52,9 @@ export class InboundRouter<Ctx extends Context> {
                 return;
             case MessageType.Close: {
                 const closed = msg.closed ?? from;
-                let changed = false;
-                for (const slot of this.registry.values()) if (slot.evictDeparted(closed)) changed = true;
-                if (changed) this.scheduler.scheduleSteady();
+                let buffered = false;
+                for (const slot of this.registry.values()) if (slot.ingestClose(closed)) buffered = true;
+                if (buffered) this.scheduler.scheduleClose();
                 return;
             }
         }

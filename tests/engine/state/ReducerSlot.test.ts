@@ -66,14 +66,32 @@ describe('ReducerSlot', () => {
         expect(s.state?.value).toEqual(['a', 'b']);
     });
 
-    it('evictDeparted clears all cached views on a real departure, no-op otherwise', () => {
+    it('ingestClose buffers only a known peer (no-op for an unknown / repeat departure)', () => {
+        const s = slot();
+        s.ingestShare('b', ['b'], 1, 1000);
+
+        expect(s.ingestClose('zzz')).toBe(false); // never in Σ → ignored
+        expect(s.ingestClose('b')).toBe(true); // known peer → buffered
+        expect(s.ingestClose('b')).toBe(false); // already buffered this round
+    });
+
+    it('runClose runs the close pipeline over departures, removing them and evicting Σ', async () => {
         const s = slot();
         s.ingestShare('b', ['b'], 1, 1000);
         s.ingestShare('c', ['c'], 1, 1000);
+        await s.runShare(ctx);
+        expect(s.state?.value).toEqual(['a', 'b', 'c']);
 
-        expect(s.evictDeparted('zzz')).toBe(false); // unknown peer
-        expect(s.evictDeparted('b')).toBe(true); // real departure → wipe Σ
-        expect(s.sweep(9999, 1)).toBe(false); // nothing left to sweep
+        s.ingestClose('b');
+        expect(await s.runClose(ctx)).toBe(true);
+        expect(s.state?.value).toEqual(['a', 'c']); // 'b' filtered out by the close pipeline
+
+        // 'b' was evicted from Σ, so a later steady run does not re-admit it.
+        expect(await s.runShare(ctx)).toBe(false);
+        expect(s.state?.value).toEqual(['a', 'c']);
+
+        // Nothing buffered → no-op.
+        expect(await s.runClose(ctx)).toBe(false);
     });
 
     it('sweep evicts peers unseen past the TTL', () => {

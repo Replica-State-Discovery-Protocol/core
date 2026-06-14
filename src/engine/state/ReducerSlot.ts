@@ -17,6 +17,7 @@ import { MemoryMap } from './MemoryMap.js';
 export class ReducerSlot<Ctx extends Context> {
     private readonly memory = new MemoryMap<unknown>();
     private readonly debate = new DebateBuffer<unknown>();
+    private readonly departed = new Set<Address>();
 
     private internal: unknown = null; // prev S
     private translated: TranslatedState<unknown> | null = null;
@@ -46,16 +47,14 @@ export class ReducerSlot<Ctx extends Context> {
     }
 
     /**
-     * Evict a departed peer. In the full-consensus model a peer's payload is its *full*
-     * translated view, which transitively names the departed node; those payloads are
-     * opaque here, so evicting only the departed peer's own `Σ` slot leaves it re-injected
-     * via every surviving peer's cached view. Invalidate all cached views on a real
-     * departure; survivors rebuild `Σ` from their next fresh SHAREs. Returns whether
-     * anything was evicted.
+     * CLOSE contribution → transient departed-address buffer (consumed by the CLOSE phase).
+     * Buffers only peers actually present in `Σ`, mirroring "ignore the close of a peer we
+     * never knew"; returns whether a new departure was buffered (the trigger for a CLOSE
+     * round).
      */
-    evictDeparted(closed: Address): boolean {
-        if (!this.memory.evict(closed)) return false;
-        for (const [addr] of this.memory.snapshot()) this.memory.evict(addr);
+    ingestClose(addr: Address): boolean {
+        if (!this.memory.has(addr) || this.departed.has(addr)) return false;
+        this.departed.add(addr);
         return true;
     }
     /** TTL sweep. Returns whether any peer was evicted. */
@@ -87,6 +86,32 @@ export class ReducerSlot<Ctx extends Context> {
 
         this.internal = await this.reducer.runShare(batch, ctx, prev);
         this.translated = await this.reducer.translate(this.internal, prev, ctx);
+
+        if (this.translated.changed) {
+            this.outVersion += 1;
+            return true;
+        }
+
+        return false;
+    }
+
+    /**
+     * CLOSE round: run the reducer's close pipeline over the buffered departed addresses
+     * (which derive a new state with those peers removed), then drop their `Σ` slots so a
+     * later steady run cannot re-aggregate them. Survivors that still name a departed peer
+     * in their cached view correct it via their own CLOSE round + re-SHARE. Returns whether
+     * the derived view changed.
+     */
+    async runClose(ctx: Ctx): Promise<boolean> {
+        if (this.departed.size === 0) return false;
+        const batch = [...this.departed];
+        const prev = this.internal;
+
+        this.internal = await this.reducer.runClose(batch, ctx, prev);
+        this.translated = await this.reducer.translate(this.internal, prev, ctx);
+
+        for (const addr of batch) this.memory.evict(addr);
+        this.departed.clear();
 
         if (this.translated.changed) {
             this.outVersion += 1;

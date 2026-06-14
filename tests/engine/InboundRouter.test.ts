@@ -53,11 +53,15 @@ class RecordingSlan implements Slan {
 const recordingScheduler = () => ({
     debate: 0,
     steady: 0,
+    close: 0,
     scheduleDebate(): void {
         this.debate += 1;
     },
     scheduleSteady(): void {
         this.steady += 1;
+    },
+    scheduleClose(): void {
+        this.close += 1;
     },
 });
 
@@ -121,14 +125,21 @@ describe('InboundRouter', () => {
         expect(scheduler.steady).toBe(1);
     });
 
-    it('CLOSE of a known peer evicts and schedules steady', async () => {
+    it('CLOSE of a known peer buffers the departure and schedules a CLOSE round', async () => {
         const { scheduler, router } = setup();
         await router.handle(
             { type: MessageType.Share, from: 'peer', payloads: { members: { value: ['peer'], version: 1 } } },
             'peer',
         );
-        const before = scheduler.steady;
+        const steadyBefore = scheduler.steady; // the SHARE above scheduled one steady
         await router.handle({ type: MessageType.Close, from: 'peer', closed: 'peer' }, 'peer');
-        expect(scheduler.steady).toBe(before + 1);
+        expect(scheduler.close).toBe(1);
+        expect(scheduler.steady).toBe(steadyBefore); // CLOSE no longer rides the steady path
+    });
+
+    it('CLOSE of an unknown peer is ignored (no CLOSE round)', async () => {
+        const { scheduler, router } = setup();
+        await router.handle({ type: MessageType.Close, from: 'ghost', closed: 'ghost' }, 'ghost');
+        expect(scheduler.close).toBe(0);
     });
 });

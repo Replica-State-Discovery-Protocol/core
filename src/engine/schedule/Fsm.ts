@@ -9,6 +9,7 @@ export enum Phase {
 }
 
 const TRANSITIONS: Record<Phase, Phase[]> = {
+    // Bootstrap always begins with the DEBATE round; nothing else may run first.
     [Phase.INITIAL]: [Phase.DEBATE],
     // IDLE → DEBATE: a periodic resync re-enters DEBATE to re-gather perspectives.
     [Phase.DEBATE]: [Phase.IDLE],
