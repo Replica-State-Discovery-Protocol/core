@@ -58,7 +58,9 @@ src/
       Pipeline.ts         runner: middleware → guard → interceptor → normalizer → aggregator → translator → exception filter
       stages.ts           the 7 stage interfaces
   engine/
-    Engine.ts             public interface + thin orchestrator: lifecycle/FSM, message routing, timers, wiring
+    Engine.ts             public interface + facade: constructs/wires components, sequences start/stop, exposes state API (no protocol logic)
+    internal/Coordinator.ts   convergence lifecycle: debouncers + steady RunQueue + FSM + resync timer; runDebate/runSteady/resync + converged notify
+    internal/InboundRouter.ts inbound message routing: HELLO→STATUS reply, STATUS→DEBATE buffer, SHARE→Σ, CLOSE→evict; pokes Coordinator
     internal/ReducerSlot.ts   one reducer's Σ/DEBATE buffer/version + per-slot convergence (runDebate/runShare/ingest/evict/sweep)
     internal/SlotRegistry.ts  slots map + wire composition (composite) + state access (stateOf/stateByName/snapshotView) + sweepExpired
     internal/OutboundChannel.ts SLAN sends (hello/share/close/status) with uniform transport-error routing
