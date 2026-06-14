@@ -1,17 +1,17 @@
 import { describe, expect, it } from 'vitest';
 
-import { FakeClock } from '../../../src/clock/Clock.js';
-import type { Address } from '../../../src/domain/address.js';
-import type { Context } from '../../../src/domain/context.js';
-import type { WireMessage } from '../../../src/domain/message.js';
-import { MessageType } from '../../../src/domain/message.js';
-import { InboundRouter } from '../../../src/engine/internal/InboundRouter.js';
-import { OutboundChannel } from '../../../src/engine/internal/OutboundChannel.js';
-import { ReducerSlot } from '../../../src/engine/internal/ReducerSlot.js';
-import { SlotRegistry } from '../../../src/engine/internal/SlotRegistry.js';
-import type { Aggregator } from '../../../src/reducer/pipeline/stages.js';
-import { defineReducer, type Reducer } from '../../../src/reducer/Reducer.js';
-import type { Slan } from '../../../src/slan/Slan.js';
+import { FakeClock } from '../../src/clock/Clock.js';
+import type { Address } from '../../src/domain/address.js';
+import type { Context } from '../../src/domain/context.js';
+import type { WireMessage } from '../../src/domain/message.js';
+import { MessageType } from '../../src/domain/message.js';
+import { OutboundChannel } from '../../src/engine/channels/OutboundChannel.js';
+import { InboundRouter } from '../../src/engine/InboundRouter.js';
+import { ReducerSlot } from '../../src/engine/state/ReducerSlot.js';
+import { SlotRegistry } from '../../src/engine/state/SlotRegistry.js';
+import type { Aggregator } from '../../src/reducer/pipeline/stages.js';
+import { defineReducer, type Reducer } from '../../src/reducer/Reducer.js';
+import type { Slan } from '../../src/slan/Slan.js';
 
 type V = string[];
 const union = (self: string): Aggregator<V, V, Context> => ({

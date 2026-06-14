@@ -3,8 +3,8 @@ import type { Context } from '../../domain/context.js';
 import type { ReducerPayload } from '../../domain/message.js';
 import type { TranslatedState } from '../../domain/state.js';
 import type { Reducer } from '../../reducer/Reducer.js';
-import { DebateBuffer } from '../memory/DebateBuffer.js';
-import { MemoryMap } from '../memory/MemoryMap.js';
+import { DebateBuffer } from './DebateBuffer.js';
+import { MemoryMap } from './MemoryMap.js';
 
 /**
  * Owns one reducer's convergence state: the per-peer SHARE memory `Σ`, the transient

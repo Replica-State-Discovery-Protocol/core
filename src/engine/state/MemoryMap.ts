@@ -1,4 +1,3 @@
-// src/engine/memory/MemoryMap.ts
 import type { Address } from '../../domain/address.js';
 import type { PeerRecord } from '../../domain/peer.js';
 

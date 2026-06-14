@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { Context } from '../../../src/domain/context.js';
 import { MessageType } from '../../../src/domain/message.js';
-import { ErrorChannel } from '../../../src/engine/internal/ErrorChannel.js';
+import { ErrorChannel } from '../../../src/engine/channels/ErrorChannel.js';
 import { GuardRejected, PipelineError, PipelineStage, RsdpError, SlanError } from '../../../src/errors.js';
 import type { ExceptionFilter } from '../../../src/reducer/pipeline/stages.js';
 import type { Reducer } from '../../../src/reducer/Reducer.js';

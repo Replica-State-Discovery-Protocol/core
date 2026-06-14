@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { Address, ReducerName } from '../../../src/domain/address.js';
 import type { ReducerPayload, WireMessage } from '../../../src/domain/message.js';
 import { MessageType } from '../../../src/domain/message.js';
-import { OutboundChannel } from '../../../src/engine/internal/OutboundChannel.js';
+import { OutboundChannel } from '../../../src/engine/channels/OutboundChannel.js';
 import type { Slan } from '../../../src/slan/Slan.js';
 
 class RecordingSlan implements Slan {

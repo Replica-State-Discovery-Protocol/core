@@ -1,4 +1,3 @@
-// src/engine/phases/Fsm.ts
 import { RsdpError } from '../../errors.js';
 
 export enum Phase {

@@ -1,7 +1,6 @@
-// tests/engine/phases/Fsm.test.ts
 import { describe, expect, it } from 'vitest';
 
-import { Fsm, Phase } from '../../../src/engine/phases/Fsm.js';
+import { Fsm, Phase } from '../../../src/engine/schedule/Fsm.js';
 
 describe('Fsm', () => {
     it('starts INITIAL and walks INITIAL→DEBATE→IDLE', () => {

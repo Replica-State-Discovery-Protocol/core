@@ -1,7 +1,6 @@
-// tests/engine/memory/MemoryMap.test.ts
 import { describe, expect, it } from 'vitest';
 
-import { MemoryMap } from '../../../src/engine/memory/MemoryMap.js';
+import { MemoryMap } from '../../../src/engine/state/MemoryMap.js';
 
 describe('MemoryMap', () => {
     it('updates and snapshots non-evicted peers', () => {

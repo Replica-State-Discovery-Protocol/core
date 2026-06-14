@@ -1,11 +1,11 @@
-import type { Clock } from '../../clock/Clock.js';
-import type { Address } from '../../domain/address.js';
-import type { Context } from '../../domain/context.js';
-import type { ReducerPayload, WireMessage } from '../../domain/message.js';
-import { MessageType } from '../../domain/message.js';
-import type { OutboundChannel } from './OutboundChannel.js';
-import type { ReducerSlot } from './ReducerSlot.js';
-import type { SlotRegistry } from './SlotRegistry.js';
+import type { Clock } from '../clock/Clock.js';
+import type { Address } from '../domain/address.js';
+import type { Context } from '../domain/context.js';
+import type { ReducerPayload, WireMessage } from '../domain/message.js';
+import { MessageType } from '../domain/message.js';
+import type { OutboundChannel } from './channels/OutboundChannel.js';
+import type { ReducerSlot } from './state/ReducerSlot.js';
+import type { SlotRegistry } from './state/SlotRegistry.js';
 
 /** What {@link InboundRouter} pokes after applying a message, to drive convergence. */
 export interface ConvergenceScheduler {

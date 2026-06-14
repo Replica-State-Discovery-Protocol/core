@@ -6,14 +6,14 @@ import type { TranslatedState } from '../domain/state.js';
 import type { RsdpError } from '../errors.js';
 import type { Reducer } from '../reducer/Reducer.js';
 import type { Slan, Unsubscribe } from '../slan/Slan.js';
-import { Coordinator } from './internal/Coordinator.js';
-import { ErrorChannel } from './internal/ErrorChannel.js';
-import { InboundRouter } from './internal/InboundRouter.js';
-import { OutboundChannel } from './internal/OutboundChannel.js';
-import { ReducerSlot } from './internal/ReducerSlot.js';
-import { SlotRegistry } from './internal/SlotRegistry.js';
-import { TtlSweeper } from './internal/TtlSweeper.js';
+import { ErrorChannel } from './channels/ErrorChannel.js';
+import { OutboundChannel } from './channels/OutboundChannel.js';
+import { Coordinator } from './Coordinator.js';
+import { InboundRouter } from './InboundRouter.js';
 import type { DebounceConfig } from './schedule/Debouncer.js';
+import { TtlSweeper } from './schedule/TtlSweeper.js';
+import { ReducerSlot } from './state/ReducerSlot.js';
+import { SlotRegistry } from './state/SlotRegistry.js';
 
 export interface EngineConfig {
     /**

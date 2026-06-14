@@ -1,8 +1,8 @@
 import { describe, expect, it } from 'vitest';
 
 import type { Context } from '../../../src/domain/context.js';
-import { ReducerSlot } from '../../../src/engine/internal/ReducerSlot.js';
-import { SlotRegistry } from '../../../src/engine/internal/SlotRegistry.js';
+import { ReducerSlot } from '../../../src/engine/state/ReducerSlot.js';
+import { SlotRegistry } from '../../../src/engine/state/SlotRegistry.js';
 import type { Aggregator } from '../../../src/reducer/pipeline/stages.js';
 import { defineReducer, type Reducer } from '../../../src/reducer/Reducer.js';
 

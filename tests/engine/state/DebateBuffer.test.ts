@@ -1,7 +1,6 @@
-// tests/engine/memory/DebateBuffer.test.ts
 import { describe, expect, it } from 'vitest';
 
-import { DebateBuffer } from '../../../src/engine/memory/DebateBuffer.js';
+import { DebateBuffer } from '../../../src/engine/state/DebateBuffer.js';
 
 describe('DebateBuffer', () => {
     it('keeps the latest payload per peer and snapshots values', () => {

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { FakeClock } from '../../../src/clock/Clock.js';
-import { type Sweepable, TtlSweeper } from '../../../src/engine/internal/TtlSweeper.js';
+import { type Sweepable, TtlSweeper } from '../../../src/engine/schedule/TtlSweeper.js';
 
 // Records sweep calls and returns a queued "evicted?" verdict per tick.
 class FakeTarget implements Sweepable {

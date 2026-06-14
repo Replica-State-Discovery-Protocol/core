@@ -1,4 +1,3 @@
-// src/engine/memory/DebateBuffer.ts
 import type { Address } from '../../domain/address.js';
 
 /** Transient, one-shot store of neighbours' payloads during the DEBATE bootstrap. */

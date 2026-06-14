@@ -59,18 +59,21 @@ src/
       stages.ts           the 7 stage interfaces
   engine/
     Engine.ts             public interface + facade: constructs/wires components, sequences start/stop, exposes state API (no protocol logic)
-    internal/Coordinator.ts   convergence lifecycle: debouncers + steady RunQueue + FSM + resync timer; runDebate/runSteady/resync + converged notify
-    internal/InboundRouter.ts inbound message routing: HELLO→STATUS reply, STATUS→DEBATE buffer, SHARE→Σ, CLOSE→evict; pokes Coordinator
-    internal/ReducerSlot.ts   one reducer's Σ/DEBATE buffer/version + per-slot convergence (runDebate/runShare/ingest/evict/sweep)
-    internal/SlotRegistry.ts  slots map + wire composition (composite) + state access (stateOf/stateByName/snapshotView) + sweepExpired
-    internal/OutboundChannel.ts SLAN sends (hello/share/close/status) with uniform transport-error routing
-    internal/ErrorChannel.ts  onError subscribers + error wrapping + exception-filter routing
-    internal/TtlSweeper.ts    periodic TTL eviction sweep (clock timer → registry.sweepExpired → notify on change)
-    memory/MemoryMap.ts   Σ per reducer: update / evict / sweepExpired / snapshot
-    memory/DebateBuffer.ts transient per-round STATUS buffer (cleared after each DEBATE)
-    schedule/Debouncer.ts dual-trigger δ + D_max scheduler (clock-driven)
-    schedule/RunQueue.ts  single-flight serialized runner (drives the one steady convergence cycle)
-    phases/Fsm.ts         INITIAL → DEBATE → IDLE ↔ DEBATE(resync); IDLE → SHARE/CLOSE
+    Coordinator.ts        convergence lifecycle: debouncers + steady RunQueue + FSM + resync timer; runDebate/runSteady/resync + converged notify
+    InboundRouter.ts      inbound message routing: HELLO→STATUS reply, STATUS→DEBATE buffer, SHARE→Σ, CLOSE→evict; pokes Coordinator
+    state/                what the protocol converges
+      SlotRegistry.ts     slots map + wire composition (composite) + state access (stateOf/stateByName/snapshotView) + sweepExpired
+      ReducerSlot.ts      one reducer's Σ/DEBATE buffer/version + per-slot convergence (runDebate/runShare/ingest/evict/sweep)
+      MemoryMap.ts        Σ per reducer: update / evict / sweepExpired / snapshot
+      DebateBuffer.ts     transient per-round STATUS buffer (cleared after each DEBATE)
+    channels/             edges to the outside world
+      OutboundChannel.ts  SLAN sends (hello/share/close/status) with uniform transport-error routing
+      ErrorChannel.ts     onError subscribers + error wrapping + exception-filter routing
+    schedule/             generic timing/lifecycle mechanisms
+      Debouncer.ts        dual-trigger δ + D_max scheduler (clock-driven)
+      RunQueue.ts         single-flight serialized runner (drives the one steady convergence cycle)
+      TtlSweeper.ts       periodic TTL eviction sweep (clock timer → registry.sweepExpired → notify on change)
+      Fsm.ts              INITIAL → DEBATE → IDLE ↔ DEBATE(resync); IDLE → SHARE/CLOSE
   clock/Clock.ts          injectable Clock (SystemClock + FakeClock)
   testing/InMemorySlan.ts in-process SLAN, exported via "@rsdp/core/testing"
   index.ts                public barrel

@@ -1,16 +1,16 @@
-import type { Clock } from '../../clock/Clock.js';
-import type { Address } from '../../domain/address.js';
-import type { Context } from '../../domain/context.js';
-import { MessageType } from '../../domain/message.js';
-import type { Unsubscribe } from '../../slan/Slan.js';
-import type { StateSnapshot } from '../Engine.js';
-import { Fsm, Phase } from '../phases/Fsm.js';
-import type { DebounceConfig } from '../schedule/Debouncer.js';
-import { Debouncer } from '../schedule/Debouncer.js';
-import { RunQueue } from '../schedule/RunQueue.js';
-import type { ErrorChannel } from './ErrorChannel.js';
-import type { OutboundChannel } from './OutboundChannel.js';
-import type { SlotRegistry } from './SlotRegistry.js';
+import type { Clock } from '../clock/Clock.js';
+import type { Address } from '../domain/address.js';
+import type { Context } from '../domain/context.js';
+import { MessageType } from '../domain/message.js';
+import type { Unsubscribe } from '../slan/Slan.js';
+import type { ErrorChannel } from './channels/ErrorChannel.js';
+import type { OutboundChannel } from './channels/OutboundChannel.js';
+import type { StateSnapshot } from './Engine.js';
+import type { DebounceConfig } from './schedule/Debouncer.js';
+import { Debouncer } from './schedule/Debouncer.js';
+import { Fsm, Phase } from './schedule/Fsm.js';
+import { RunQueue } from './schedule/RunQueue.js';
+import type { SlotRegistry } from './state/SlotRegistry.js';
 
 export interface CoordinatorOptions<Ctx extends Context> {
     clock: Clock;
