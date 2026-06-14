@@ -17,8 +17,25 @@ import type { DebounceConfig } from './schedule/Debouncer.js';
 import { Debouncer } from './schedule/Debouncer.js';
 
 export interface EngineConfig {
+    /**
+     * Aggregation debounce: the quiet-gap `δ` (`delayMs`) and hard cap `D_max`
+     * (`maxWaitMs`). Each burst of incoming messages coalesces into a single reducer
+     * run that fires once arrivals stay quiet for `δ`, or at `D_max` after the first
+     * change — whichever comes first. Anchored to the HELLO broadcast for the DEBATE
+     * round and to `Σ` changes in steady state.
+     */
     debounce: DebounceConfig;
+    /**
+     * Per-peer eviction timeout `θ`: a peer whose last SHARE was seen longer ago than
+     * this is swept from `Σ`. MUST be `> resyncIntervalMs`, so a live peer is reproven
+     * by its periodic resync before it could expire (otherwise healthy peers flap).
+     */
     ttlMs: number;
+    /**
+     * How often the TTL sweep runs (clock-driven). Bounds how long an already-expired
+     * peer lingers in `Σ` before removal; smaller means tighter eviction latency at the
+     * cost of more frequent wake-ups. Independent of `θ` itself.
+     */
     sweepIntervalMs: number;
     /**
      * Periodic resync period: every `resyncIntervalMs` a node re-broadcasts HELLO,
@@ -70,16 +87,20 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     private readonly errors = new ErrorChannel<Ctx>();
     private readonly outbound: OutboundChannel;
     private readonly convergedCbs = new Set<(s: StateSnapshot<Ctx>) => void>();
+
     private steadyDebouncer!: Debouncer;
     private debateDebouncer!: Debouncer;
+
     private sweepTimer: ReturnType<Clock['setTimer']> | null = null;
     private resyncTimer: ReturnType<Clock['setTimer']> | null = null;
+
     private unsub: Unsubscribe | null = null;
     private debatePending: Promise<void> = Promise.resolve();
 
     constructor(private readonly opts: CreateEngineOptions<Ctx>) {
         this.clock = opts.clock ?? new SystemClock();
         this.outbound = new OutboundChannel(opts.slan, opts.identity.address, this.errors);
+
         for (const r of opts.reducers) {
             const slot = new ReducerSlot<Ctx>(r as Reducer<unknown, unknown, Ctx>);
             slot.attachShareRunner(() => this.onSlotShare(slot));
