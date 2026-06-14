@@ -5,16 +5,16 @@ import type { Context } from '../domain/context.js';
 import type { ReducerPayload, WireMessage } from '../domain/message.js';
 import { MessageType } from '../domain/message.js';
 import type { TranslatedState } from '../domain/state.js';
-import { PipelineError, PipelineStage, RsdpError, SlanError } from '../errors.js';
-import type { ExceptionFilter } from '../reducer/pipeline/stages.js';
+import type { RsdpError } from '../errors.js';
 import type { Reducer } from '../reducer/Reducer.js';
 import type { Slan, Unsubscribe } from '../slan/Slan.js';
-import { DebateBuffer } from './memory/DebateBuffer.js';
-import { MemoryMap } from './memory/MemoryMap.js';
+import { ErrorChannel } from './internal/ErrorChannel.js';
+import { OutboundChannel } from './internal/OutboundChannel.js';
+import { ReducerSlot } from './internal/ReducerSlot.js';
+import { SlotRegistry } from './internal/SlotRegistry.js';
 import { Fsm, Phase } from './phases/Fsm.js';
 import type { DebounceConfig } from './schedule/Debouncer.js';
 import { Debouncer } from './schedule/Debouncer.js';
-import { RunQueue } from './schedule/RunQueue.js';
 
 export interface EngineConfig {
     debounce: DebounceConfig;
@@ -46,19 +46,6 @@ export interface Engine<Ctx extends Context> {
     settle(): Promise<void>;
 }
 
-interface ReducerSlot<Ctx extends Context> {
-    reducer: Reducer<unknown, unknown, Ctx>;
-    memory: MemoryMap<unknown>;
-    debate: DebateBuffer<unknown>;
-    queue: RunQueue;
-    internal: unknown; // prev S
-    translated: TranslatedState<unknown> | null;
-    // Monotonic outbound version, bumped only when this reducer's translated
-    // value actually changes. Decouples wire versioning from the wall clock so
-    // two distinct updates in the same millisecond are never collapsed.
-    outVersion: number;
-}
-
 export interface CreateEngineOptions<Ctx extends Context> {
     identity: NodeIdentity;
     slan: Slan;
@@ -69,12 +56,20 @@ export interface CreateEngineOptions<Ctx extends Context> {
     observer?: (snapshot: StateSnapshot<Ctx>) => void;
 }
 
+/**
+ * Orchestrator. Owns the protocol lifecycle (FSM, timers, message routing) and wires
+ * together the collaborators that do the work: per-reducer convergence ({@link ReducerSlot}
+ * via {@link SlotRegistry}), outbound messaging ({@link OutboundChannel}) and error
+ * routing ({@link ErrorChannel}). The convergence math, wire composition and transport
+ * boilerplate live in those modules, not here.
+ */
 class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     private readonly clock: Clock;
     private readonly fsm = new Fsm();
-    private readonly slots = new Map<ReducerName, ReducerSlot<Ctx>>();
+    private readonly registry = new SlotRegistry<Ctx>();
+    private readonly errors = new ErrorChannel<Ctx>();
+    private readonly outbound: OutboundChannel;
     private readonly convergedCbs = new Set<(s: StateSnapshot<Ctx>) => void>();
-    private readonly errorCbs = new Set<(e: RsdpError) => void>();
     private steadyDebouncer!: Debouncer;
     private debateDebouncer!: Debouncer;
     private sweepTimer: ReturnType<Clock['setTimer']> | null = null;
@@ -84,18 +79,11 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
 
     constructor(private readonly opts: CreateEngineOptions<Ctx>) {
         this.clock = opts.clock ?? new SystemClock();
+        this.outbound = new OutboundChannel(opts.slan, opts.identity.address, this.errors);
         for (const r of opts.reducers) {
-            const slot: ReducerSlot<Ctx> = {
-                reducer: r as Reducer<unknown, unknown, Ctx>,
-                memory: new MemoryMap<unknown>(),
-                debate: new DebateBuffer<unknown>(),
-                queue: new RunQueue(() => Promise.resolve()),
-                internal: null,
-                translated: null,
-                outVersion: 0,
-            };
-            slot.queue = new RunQueue(() => this.runShare(slot));
-            this.slots.set(r.name, slot);
+            const slot = new ReducerSlot<Ctx>(r as Reducer<unknown, unknown, Ctx>);
+            slot.attachShareRunner(() => this.onSlotShare(slot));
+            this.registry.add(slot);
         }
     }
 
@@ -110,30 +98,18 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
         this.debateDebouncer = new Debouncer(this.clock, this.opts.config.debounce, () => {
             this.debatePending = this.runDebate();
         });
-        this.steadyDebouncer = new Debouncer(this.clock, this.opts.config.debounce, () => this.triggerAll());
+        this.steadyDebouncer = new Debouncer(this.clock, this.opts.config.debounce, () => this.registry.triggerAll());
 
         this.fsm.to(Phase.DEBATE);
-        try {
-            await this.opts.slan.broadcast({ type: MessageType.Hello, from: this.opts.identity.address });
-        } catch (err) {
-            this.emitSlanError('broadcast', err);
-        }
-        // Anchor the one-shot DEBATE window to the HELLO broadcast.
+        await this.outbound.hello();
+        // Anchor the DEBATE window to the HELLO broadcast.
         this.debateDebouncer.notifyChange();
 
         this.sweepTimer = this.clock.setTimer(() => this.sweep(), this.opts.config.sweepIntervalMs);
     }
 
     async stop(): Promise<void> {
-        try {
-            await this.opts.slan.broadcast({
-                type: MessageType.Close,
-                from: this.opts.identity.address,
-                closed: this.opts.identity.address,
-            });
-        } catch (err) {
-            this.emitSlanError('broadcast', err);
-        }
+        await this.outbound.close();
         if (this.sweepTimer !== null) this.clock.clearTimer(this.sweepTimer);
         if (this.resyncTimer !== null) this.clock.clearTimer(this.resyncTimer);
         this.debateDebouncer.cancel();
@@ -146,49 +122,22 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
         switch (msg.type) {
             case MessageType.Hello:
                 // Reply with our current view as STATUS (full-consensus mode).
-                try {
-                    await this.opts.slan.sendTo(from, {
-                        type: MessageType.Status,
-                        from: this.opts.identity.address,
-                        payloads: this.composite(),
-                    });
-                } catch (err) {
-                    this.emitSlanError('sendTo', err);
-                }
+                await this.outbound.status(from, this.registry.composite());
                 return;
             case MessageType.Status:
-                this.ingest(
-                    msg,
-                    (slot, payload) => {
-                        slot.debate.set(from, payload.value);
-                        return true;
-                    },
-                    this.debateDebouncer,
-                );
+                this.ingest(msg, (slot, p) => slot.ingestStatus(from, p.value), this.debateDebouncer);
                 return;
             case MessageType.Share:
                 this.ingest(
                     msg,
-                    (slot, payload) => slot.memory.update(from, payload.value, payload.version, this.clock.now()),
+                    (slot, p) => slot.ingestShare(from, p.value, p.version, this.clock.now()),
                     this.steadyDebouncer,
                 );
                 return;
             case MessageType.Close: {
                 const closed = msg.closed ?? from;
                 let changed = false;
-                for (const slot of this.slots.values()) {
-                    if (!slot.memory.evict(closed)) continue;
-                    changed = true;
-                    // In the full-consensus model a peer's wire payload is its *full*
-                    // translated view, which transitively names the departed node. Those
-                    // payloads are opaque (`unknown`) to the engine, so we cannot scrub the
-                    // departed id from them surgically. Evicting only the departed peer's own
-                    // Σ slot leaves it re-injected via every surviving peer's cached view, so
-                    // it can never be forgotten. Invalidate all cached peer views on a real
-                    // departure; survivors rebuild Σ from their next fresh SHAREs (driven by
-                    // the debounced re-run + re-broadcast).
-                    for (const [addr] of slot.memory.snapshot()) slot.memory.evict(addr);
-                }
+                for (const slot of this.registry.values()) if (slot.evictDeparted(closed)) changed = true;
                 if (changed) this.steadyDebouncer.notifyChange();
                 return;
             }
@@ -203,12 +152,12 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
         if (!msg.payloads) return;
         let changed = false;
         for (const [name, payload] of Object.entries(msg.payloads)) {
-            const slot = this.slots.get(name);
+            const slot = this.registry.get(name);
             if (!slot) continue;
             // A peer that has not yet translated a value emits `value: null` in its
-            // composite (e.g. a STATUS reply to HELLO before its DEBATE has run).
-            // Such empty contributions must not be ingested, or `null` leaks into
-            // reducer batches and pollutes the converged state forever.
+            // composite (e.g. a STATUS reply to HELLO before its DEBATE has run). Such
+            // empty contributions must not be ingested, or `null` leaks into reducer
+            // batches and pollutes the converged state forever.
             if (payload.value === null) continue;
             // Only treat the message as a real change when the slot actually updated
             // (stale/duplicate SHAREs return false and must NOT trigger a re-run).
@@ -218,191 +167,84 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     }
 
     private async runDebate(): Promise<void> {
-        for (const slot of this.slots.values()) {
+        for (const slot of this.registry.values()) {
             try {
-                // Re-gather BOTH this round's freshly-pulled perspectives (STATUS
-                // replies in the transient DEBATE buffer) AND the retained state data
-                // (peers' last SHARE views in Σ). Converging over the union means a
-                // peer briefly silent for one resync round is held by Σ until its TTL
-                // genuinely lapses, instead of being dropped and re-added every round.
-                const batch = [...slot.debate.snapshot(), ...slot.memory.snapshot().map(([, payload]) => payload)];
-                // Capture the prior state so change detection compares against the
-                // last converged view. DEBATE re-runs on every resync round, so a
-                // null prev would mark every round "changed" and bump versions
-                // (and re-broadcast) needlessly even when membership is unchanged.
-                const prev = slot.internal;
-                slot.internal = await slot.reducer.runStatus(batch, this.ctx(), prev);
-                slot.translated = await slot.reducer.translate(slot.internal, prev, this.ctx());
-                if (slot.translated.changed) slot.outVersion += 1;
-                slot.debate.clear();
+                await slot.runDebate(this.ctx());
             } catch (err) {
-                await this.emitError(slot.reducer, MessageType.Status, err);
+                await this.errors.emitPipeline(slot.reducer, MessageType.Status, err, this.ctx());
             }
         }
         this.fsm.to(Phase.IDLE);
-        await this.opts.slan.broadcast({
-            type: MessageType.Share,
-            from: this.opts.identity.address,
-            payloads: this.composite(),
-        });
+        await this.outbound.share(this.registry.composite());
         // Enter steady state: start the periodic resync (re-HELLO) so a converged
         // cluster does not go silent — each round re-gathers peers' STATUS, re-derives
         // the view, and re-broadcasts SHARE, keeping liveness fresh (TTL only evicts
         // genuinely-departed nodes) and folding in late joiners / missed updates.
-        // Idempotent across the repeated DEBATE rounds.
         this.resyncTimer ??= this.clock.setTimer(() => this.resync(), this.opts.config.resyncIntervalMs);
         this.notifyConverged();
     }
 
     /**
-     * Periodic resync: re-broadcast HELLO and re-anchor the bounded DEBATE window.
-     * This redoes the discovery handshake — every peer replies with its current
-     * STATUS, which feeds a fresh DEBATE aggregation that re-derives our converged
-     * view and re-broadcasts SHARE. Re-gathering perspectives this way (rather than
-     * pushing our own possibly-stale aggregate) is what makes the protocol
-     * eventually consistent: late joiners, missed updates and healed partitions are
-     * folded in, and the resulting SHARE refreshes our liveness in peers' Σ (via the
-     * MemoryMap equal-version path) so TTL only evicts genuinely-departed nodes.
+     * Periodic resync: re-broadcast HELLO and re-anchor the bounded DEBATE window,
+     * redoing the discovery handshake so peers reply with STATUS and we re-derive our
+     * view. Re-gathering perspectives (rather than pushing our possibly-stale aggregate)
+     * is what makes the protocol eventually consistent; the resulting SHARE refreshes
+     * our liveness in peers' `Σ` so TTL only evicts genuinely-departed nodes.
      */
     private resync(): void {
         // Re-enter DEBATE to re-gather perspectives. If a DEBATE round is already in
         // flight (state still converging), it already serves the resync — just re-arm.
         if (this.fsm.phase === Phase.IDLE) {
             this.fsm.to(Phase.DEBATE);
-            void (async () => {
-                try {
-                    await this.opts.slan.broadcast({ type: MessageType.Hello, from: this.opts.identity.address });
-                } catch (err) {
-                    this.emitSlanError('broadcast', err);
-                }
-            })();
-            // Anchor a fresh DEBATE window to this resync HELLO, mirroring start();
-            // this also guarantees runDebate fires (and returns us to IDLE) even with
-            // no peers replying, so the FSM never gets stuck in DEBATE.
+            void this.outbound.hello();
+            // Anchor a fresh DEBATE window to this resync HELLO, mirroring start(); this
+            // also guarantees runDebate fires (and returns us to IDLE) even with no peers
+            // replying, so the FSM never gets stuck in DEBATE.
             this.debateDebouncer.notifyChange();
         }
         this.resyncTimer = this.clock.setTimer(() => this.resync(), this.opts.config.resyncIntervalMs);
     }
 
-    private triggerAll(): void {
-        for (const slot of this.slots.values()) slot.queue.trigger();
-    }
-
-    private async runShare(slot: ReducerSlot<Ctx>): Promise<void> {
+    /** Single-flight steady-state run for one slot; broadcasts the composite on change. */
+    private async onSlotShare(slot: ReducerSlot<Ctx>): Promise<void> {
         try {
-            const batch = slot.memory.snapshot().map(([, payload]) => payload);
-            const prev = slot.internal;
-            slot.internal = await slot.reducer.runShare(batch, this.ctx(), prev);
-            const translated = await slot.reducer.translate(slot.internal, prev, this.ctx());
-            slot.translated = translated;
-            if (translated.changed) {
-                slot.outVersion += 1;
-                await this.opts.slan.broadcast({
-                    type: MessageType.Share,
-                    from: this.opts.identity.address,
-                    payloads: this.composite(),
-                });
-            }
+            if (await slot.runShare(this.ctx())) await this.outbound.share(this.registry.composite());
             this.notifyConverged();
         } catch (err) {
-            await this.emitError(slot.reducer, MessageType.Share, err);
+            await this.errors.emitPipeline(slot.reducer, MessageType.Share, err, this.ctx());
         }
     }
 
     private sweep(): void {
         const now = this.clock.now();
         let changed = false;
-        for (const slot of this.slots.values())
-            changed = slot.memory.sweepExpired(now, this.opts.config.ttlMs).length > 0 || changed;
+        for (const slot of this.registry.values()) changed = slot.sweep(now, this.opts.config.ttlMs) || changed;
         if (changed) this.steadyDebouncer.notifyChange();
         this.sweepTimer = this.clock.setTimer(() => this.sweep(), this.opts.config.sweepIntervalMs);
     }
 
-    private composite(): Record<ReducerName, ReducerPayload> {
-        const out: Record<ReducerName, ReducerPayload> = {};
-        for (const [name, slot] of this.slots) {
-            out[name] = { value: slot.translated?.value ?? null, version: slot.outVersion };
-        }
-        return out;
-    }
-
-    private snapshotView(): StateSnapshot<Ctx> {
-        const slots = this.slots;
-        return {
-            get<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null {
-                return (slots.get(reducer.name)?.translated as TranslatedState<V> | undefined) ?? null;
-            },
-        };
-    }
-
     stateOf<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null {
-        return (this.slots.get(reducer.name)?.translated as TranslatedState<V> | undefined) ?? null;
+        return this.registry.stateOf(reducer);
     }
     stateByName(name: ReducerName): TranslatedState<unknown> | null {
-        return this.slots.get(name)?.translated ?? null;
+        return this.registry.stateByName(name);
     }
     onConverged(cb: (s: StateSnapshot<Ctx>) => void): Unsubscribe {
         this.convergedCbs.add(cb);
         return () => this.convergedCbs.delete(cb);
     }
     onError(cb: (e: RsdpError) => void): Unsubscribe {
-        this.errorCbs.add(cb);
-        return () => this.errorCbs.delete(cb);
+        return this.errors.subscribe(cb);
     }
     async settle(): Promise<void> {
         await this.debatePending;
-        await Promise.all([...this.slots.values()].map((s) => s.queue.idle()));
-    }
-
-    /** Route a SLAN transport failure to onError instead of letting it float. */
-    private emitSlanError(op: string, err: unknown): void {
-        const wrapped =
-            err instanceof RsdpError
-                ? err
-                : new SlanError(`SLAN ${op} failed: ${err instanceof Error ? err.message : String(err)}`);
-        for (const cb of this.errorCbs) cb(wrapped);
+        await this.registry.idleAll();
     }
 
     private notifyConverged(): void {
-        const snap = this.snapshotView();
+        const snap = this.registry.snapshotView();
         this.opts.observer?.(snap);
         for (const cb of this.convergedCbs) cb(snap);
-    }
-
-    private filtersFor(reducer: Reducer<unknown, unknown, Ctx>, stage: MessageType): ExceptionFilter<Ctx>[] {
-        switch (stage) {
-            case MessageType.Status:
-                return reducer.exceptionFilters.status;
-            case MessageType.Share:
-                return reducer.exceptionFilters.share;
-            case MessageType.Close:
-                return reducer.exceptionFilters.close;
-            default:
-                return [];
-        }
-    }
-
-    private async emitError(reducer: Reducer<unknown, unknown, Ctx>, stage: MessageType, err: unknown): Promise<void> {
-        const wrapped =
-            err instanceof RsdpError
-                ? err
-                : new PipelineError(err instanceof Error ? err.message : String(err), {
-                      reducer: reducer.name,
-                      stage: PipelineStage.Aggregator,
-                      messageType: stage,
-                  });
-
-        // Give the reducer's pipeline exception filters a chance to handle the error
-        // before escalating to onError. A filter that throws falls through to onError.
-        for (const filter of this.filtersFor(reducer, stage)) {
-            try {
-                await filter.handle(wrapped, this.ctx());
-            } catch {
-                // Filter rejected/failed — fall back to the global onError escalation.
-            }
-        }
-
-        for (const cb of this.errorCbs) cb(wrapped);
     }
 }
 
