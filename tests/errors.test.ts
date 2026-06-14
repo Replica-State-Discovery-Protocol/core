@@ -1,8 +1,8 @@
-// tests/domain/errors.test.ts
+// tests/errors.test.ts
 import { describe, expect, it } from 'vitest';
 
-import { MessageType } from '../../src/domain/message.js';
-import { ConfigError, GuardRejected, PipelineError, PipelineStage, RsdpError } from '../../src/errors.js';
+import { MessageType } from '../src/domain/message.js';
+import { ConfigError, GuardRejected, PipelineError, PipelineStage, RsdpError } from '../src/errors.js';
 
 describe('error hierarchy', () => {
     it('all errors extend RsdpError and carry a name', () => {

@@ -2,7 +2,9 @@ export type TimerHandle = number;
 
 export interface Clock {
     now(): number;
+
     setTimer(fn: () => void, ms: number): TimerHandle;
+
     clearTimer(handle: TimerHandle): void;
 }
 
@@ -10,9 +12,11 @@ export class SystemClock implements Clock {
     now(): number {
         return Date.now();
     }
+
     setTimer(fn: () => void, ms: number): TimerHandle {
         return setTimeout(fn, ms) as unknown as TimerHandle;
     }
+
     clearTimer(handle: TimerHandle): void {
         clearTimeout(handle);
     }

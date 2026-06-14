@@ -11,6 +11,7 @@ export class RunQueue {
             this.dirty = true;
             return;
         }
+
         this.running = true;
         this.settled = this.loop();
     }

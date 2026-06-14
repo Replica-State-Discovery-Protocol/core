@@ -17,6 +17,7 @@ import { RunQueue } from '../schedule/RunQueue.js';
 export class ReducerSlot<Ctx extends Context> {
     private readonly memory = new MemoryMap<unknown>();
     private readonly debate = new DebateBuffer<unknown>();
+
     private queue = new RunQueue(() => Promise.resolve());
     private internal: unknown = null; // prev S
     private translated: TranslatedState<unknown> | null = null;
@@ -83,8 +84,10 @@ export class ReducerSlot<Ctx extends Context> {
     async runDebate(ctx: Ctx): Promise<void> {
         const batch = [...this.debate.snapshot(), ...this.memory.snapshot().map(([, payload]) => payload)];
         const prev = this.internal;
+
         this.internal = await this.reducer.runStatus(batch, ctx, prev);
         this.translated = await this.reducer.translate(this.internal, prev, ctx);
+
         if (this.translated.changed) this.outVersion += 1;
         this.debate.clear();
     }
@@ -93,12 +96,15 @@ export class ReducerSlot<Ctx extends Context> {
     async runShare(ctx: Ctx): Promise<boolean> {
         const batch = this.memory.snapshot().map(([, payload]) => payload);
         const prev = this.internal;
+
         this.internal = await this.reducer.runShare(batch, ctx, prev);
         this.translated = await this.reducer.translate(this.internal, prev, ctx);
+
         if (this.translated.changed) {
             this.outVersion += 1;
             return true;
         }
+
         return false;
     }
 }

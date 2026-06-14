@@ -51,7 +51,9 @@ src/
   slan/
     Slan.ts               transport PORT (init/close/broadcast/sendTo/onMessage/address)
   reducer/
-    Reducer.ts            Reducer<S,V,Ctx> + defineReducer builder (closure-grouped)
+    Reducer.ts            public face: Reducer<S,V,Ctx> runtime class + Translator + defineReducer()
+    internal/ReducerBuilder.ts  fluent builder behind defineReducer (closure-grouped); validates + assembles
+    internal/PipelineBuilder.ts per-message-type pipeline accumulator + Configure callback type
     pipeline/
       Pipeline.ts         runner: middleware → guard → interceptor → normalizer → aggregator → translator → exception filter
       stages.ts           the 7 stage interfaces
