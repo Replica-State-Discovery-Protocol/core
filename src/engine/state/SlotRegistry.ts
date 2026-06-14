@@ -33,13 +33,11 @@ export class SlotRegistry<Ctx extends Context> {
     stateByName(name: ReducerName): TranslatedState<unknown> | null {
         return this.slots.get(name)?.state ?? null;
     }
-    /** Read-only view passed to convergence observers. */
+    /** Read-only view passed to convergence observers; `get` delegates to {@link stateOf}. */
     snapshotView(): StateSnapshot<Ctx> {
-        const slots = this.slots;
         return {
-            get<State, View>(reducer: Reducer<State, View, Ctx>): TranslatedState<View> | null {
-                return (slots.get(reducer.name)?.state as TranslatedState<View> | undefined) ?? null;
-            },
+            get: <State, View>(reducer: Reducer<State, View, Ctx>): TranslatedState<View> | null =>
+                this.stateOf(reducer),
         };
     }
 

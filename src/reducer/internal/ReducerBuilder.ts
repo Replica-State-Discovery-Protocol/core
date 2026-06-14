@@ -36,17 +36,18 @@ export class ReducerBuilder<State, View, Ctx extends Context> {
         return this.build();
     }
 
+    /** Assert a required builder part is present, else fail with a clear ConfigError. */
+    private need<T>(value: T | undefined, what: string): T {
+        if (value === undefined) throw new ConfigError(`reducer "${this.name}" is missing ${what}`);
+        return value;
+    }
+
     /** Validate and assemble. Throws ConfigError if anything required is missing. */
     build(): Reducer<State, View, Ctx> {
-        const need = <T>(v: T | undefined, what: string): T => {
-            if (v === undefined) throw new ConfigError(`reducer "${this.name}" is missing ${what}`);
-            return v;
-        };
-
-        const status = need(this.statusB, 'a STATUS pipeline');
-        const share = need(this.shareB, 'a SHARE pipeline');
-        const close = need(this.closeB, 'a CLOSE pipeline');
-        const translator = need(this.translator, 'a translator');
+        const status = this.need(this.statusB, 'a STATUS pipeline');
+        const share = this.need(this.shareB, 'a SHARE pipeline');
+        const close = this.need(this.closeB, 'a CLOSE pipeline');
+        const translator = this.need(this.translator, 'a translator');
 
         for (const [b, label] of [
             [status, MessageType.Status],
