@@ -18,29 +18,38 @@ export class Pipeline<Raw, Mapped, State, Ctx> {
         private readonly stages: PipelineStages<Raw, Mapped, State, Ctx>,
     ) {}
 
-    async run(batch: Raw[], ctx: Ctx, prev: State | null): Promise<State> {
-        const core: PipelineRun<Raw, State, Ctx> = async (b, c, p) => {
-            for (const guard of this.stages.guards ?? []) {
-                if (!(await guard.check(b, c, p))) {
-                    throw new GuardRejected(`guard rejected ${this.reducerName}/${this.messageType}`);
-                }
-            }
-            const normalized: Mapped[] = this.stages.normalizer
-                ? await this.stages.normalizer.normalize(b, c)
-                : (b as unknown as Mapped[]);
+    /** Outermost entry: wrap the core run with middleware (outside-in), then invoke it. */
+    run(batch: Raw[], ctx: Ctx, prev: State | null): Promise<State> {
+        let run: PipelineRun<Raw, State, Ctx> = this.runCore.bind(this);
 
-            let aggregate: Aggregate<Mapped, State, Ctx> = (mb, mc, mp) =>
-                Promise.resolve(this.stages.aggregator.aggregate(mb, mc, mp));
-            for (const interceptor of [...(this.stages.interceptors ?? [])].reverse()) {
-                aggregate = interceptor.wrap(aggregate);
-            }
-            return aggregate(normalized, c, p);
-        };
-
-        let run = core;
         for (const mw of [...(this.stages.middleware ?? [])].reverse()) {
             run = mw.wrap(run);
         }
+
         return run(batch, ctx, prev);
+    }
+
+    /** The inner pipeline (inside all middleware): guards → normalize → interceptors → aggregate. */
+    private async runCore(batch: Raw[], ctx: Ctx, prev: State | null): Promise<State> {
+        for (const guard of this.stages.guards ?? []) {
+            if (!(await guard.check(batch, ctx, prev))) {
+                throw new GuardRejected(`guard rejected ${this.reducerName}/${this.messageType}`);
+            }
+        }
+
+        const normalized: Mapped[] = this.stages.normalizer
+            ? await this.stages.normalizer.normalize(batch, ctx)
+            : (batch as unknown as Mapped[]);
+
+        let aggregate: Aggregate<Mapped, State, Ctx> = this.aggregate.bind(this);
+        for (const interceptor of [...(this.stages.interceptors ?? [])].reverse()) {
+            aggregate = interceptor.wrap(aggregate);
+        }
+        return aggregate(normalized, ctx, prev);
+    }
+
+    /** The base aggregate step, before interceptors wrap it. */
+    private aggregate(batch: Mapped[], ctx: Ctx, prev: State | null): Promise<State> {
+        return Promise.resolve(this.stages.aggregator.aggregate(batch, ctx, prev));
     }
 }
