@@ -42,4 +42,11 @@ export class SlotRegistry<Ctx extends Context> {
             },
         };
     }
+
+    /** TTL sweep across every reducer's `Σ`. Returns whether any peer was evicted. */
+    sweepExpired(now: number, ttlMs: number): boolean {
+        let changed = false;
+        for (const slot of this.slots.values()) if (slot.sweep(now, ttlMs)) changed = true;
+        return changed;
+    }
 }

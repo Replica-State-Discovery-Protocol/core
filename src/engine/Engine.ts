@@ -12,6 +12,7 @@ import { ErrorChannel } from './internal/ErrorChannel.js';
 import { OutboundChannel } from './internal/OutboundChannel.js';
 import { ReducerSlot } from './internal/ReducerSlot.js';
 import { SlotRegistry } from './internal/SlotRegistry.js';
+import { TtlSweeper } from './internal/TtlSweeper.js';
 import { Fsm, Phase } from './phases/Fsm.js';
 import type { DebounceConfig } from './schedule/Debouncer.js';
 import { Debouncer } from './schedule/Debouncer.js';
@@ -92,7 +93,6 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     private steadyDebouncer!: Debouncer;
     private debateDebouncer!: Debouncer;
 
-    private sweepTimer: ReturnType<Clock['setTimer']> | null = null;
     private resyncTimer: ReturnType<Clock['setTimer']> | null = null;
 
     private unsub: Unsubscribe | null = null;
@@ -102,10 +102,14 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     // its Σ, then emit at most ONE composite SHARE. Messaging is an engine-level
     // concern — never per reducer — so N changed reducers still produce one broadcast.
     private readonly steadyQueue = new RunQueue(() => this.runSteady());
+    private readonly sweeper: TtlSweeper;
 
     constructor(private readonly opts: CreateEngineOptions<Ctx>) {
         this.clock = opts.clock ?? new SystemClock();
         this.outbound = new OutboundChannel(opts.slan, opts.identity.address, this.errors);
+        this.sweeper = new TtlSweeper(this.clock, this.registry, opts.config.ttlMs, opts.config.sweepIntervalMs, () =>
+            this.steadyDebouncer.notifyChange(),
+        );
 
         for (const r of opts.reducers) {
             this.registry.add(new ReducerSlot<Ctx>(r as Reducer<unknown, unknown, Ctx>));
@@ -130,15 +134,18 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
         // Anchor the DEBATE window to the HELLO broadcast.
         this.debateDebouncer.notifyChange();
 
-        this.sweepTimer = this.clock.setTimer(() => this.sweep(), this.opts.config.sweepIntervalMs);
+        this.sweeper.start();
     }
 
     async stop(): Promise<void> {
         await this.outbound.close();
-        if (this.sweepTimer !== null) this.clock.clearTimer(this.sweepTimer);
+
+        this.sweeper.stop();
         if (this.resyncTimer !== null) this.clock.clearTimer(this.resyncTimer);
+
         this.debateDebouncer.cancel();
         this.steadyDebouncer.cancel();
+
         this.unsub?.();
         await this.opts.slan.close();
     }
@@ -246,14 +253,6 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
         }
         if (changed) await this.outbound.share(this.registry.composite());
         this.notifyConverged();
-    }
-
-    private sweep(): void {
-        const now = this.clock.now();
-        let changed = false;
-        for (const slot of this.registry.values()) changed = slot.sweep(now, this.opts.config.ttlMs) || changed;
-        if (changed) this.steadyDebouncer.notifyChange();
-        this.sweepTimer = this.clock.setTimer(() => this.sweep(), this.opts.config.sweepIntervalMs);
     }
 
     stateOf<S, V>(reducer: Reducer<S, V, Ctx>): TranslatedState<V> | null {

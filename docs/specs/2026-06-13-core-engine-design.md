@@ -59,10 +59,11 @@ src/
       stages.ts           the 7 stage interfaces
   engine/
     Engine.ts             public interface + thin orchestrator: lifecycle/FSM, message routing, timers, wiring
-    internal/ReducerSlot.ts   one reducer's Σ/DEBATE buffer/run-queue/version + per-slot convergence (runDebate/runShare/ingest/evict/sweep)
-    internal/SlotRegistry.ts  slots map + wire composition (composite) + state access (stateOf/stateByName/snapshotView)
+    internal/ReducerSlot.ts   one reducer's Σ/DEBATE buffer/version + per-slot convergence (runDebate/runShare/ingest/evict/sweep)
+    internal/SlotRegistry.ts  slots map + wire composition (composite) + state access (stateOf/stateByName/snapshotView) + sweepExpired
     internal/OutboundChannel.ts SLAN sends (hello/share/close/status) with uniform transport-error routing
     internal/ErrorChannel.ts  onError subscribers + error wrapping + exception-filter routing
+    internal/TtlSweeper.ts    periodic TTL eviction sweep (clock timer → registry.sweepExpired → notify on change)
     memory/MemoryMap.ts   Σ per reducer: update / evict / sweepExpired / snapshot
     memory/DebateBuffer.ts transient per-round STATUS buffer (cleared after each DEBATE)
     schedule/Debouncer.ts dual-trigger δ + D_max scheduler (clock-driven)
