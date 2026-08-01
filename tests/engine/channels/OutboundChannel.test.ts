@@ -41,20 +41,21 @@ const recordingErrors = () => {
 const payloads: Record<ReducerName, ReducerPayload> = { r: { value: ['x'], version: 3 } };
 
 describe('OutboundChannel', () => {
-    it('stamps the node identity on hello/share/close and targets status', async () => {
+    it('stamps the node identity and incarnation on hello/share/close and targets status', async () => {
         const slan = new RecordingSlan();
-        const out = new OutboundChannel(slan, 'self', recordingErrors());
+        const out = new OutboundChannel(slan, 'self', recordingErrors(), 7);
 
         await out.hello();
         await out.share(payloads);
         await out.close();
         await out.status('peer', payloads);
 
+        // ι rides at message level, once per message — not once per reducer entry.
         expect(slan.sent).toEqual([
-            { kind: 'broadcast', msg: { type: MessageType.Hello, from: 'self' } },
-            { kind: 'broadcast', msg: { type: MessageType.Share, from: 'self', payloads } },
-            { kind: 'broadcast', msg: { type: MessageType.Close, from: 'self', closed: 'self' } },
-            { kind: 'sendTo', target: 'peer', msg: { type: MessageType.Status, from: 'self', payloads } },
+            { kind: 'broadcast', msg: { type: MessageType.Hello, from: 'self', inc: 7 } },
+            { kind: 'broadcast', msg: { type: MessageType.Share, from: 'self', inc: 7, payloads } },
+            { kind: 'broadcast', msg: { type: MessageType.Close, from: 'self', inc: 7, closed: 'self' } },
+            { kind: 'sendTo', target: 'peer', msg: { type: MessageType.Status, from: 'self', inc: 7, payloads } },
         ]);
     });
 
@@ -62,7 +63,7 @@ describe('OutboundChannel', () => {
         const slan = new RecordingSlan();
         slan.failBroadcast = true;
         const errors = recordingErrors();
-        const out = new OutboundChannel(slan, 'self', errors);
+        const out = new OutboundChannel(slan, 'self', errors, 7);
 
         await expect(out.share(payloads)).resolves.toBeUndefined();
         expect(errors.calls).toHaveLength(1);
@@ -75,7 +76,7 @@ describe('OutboundChannel', () => {
         const slan = new RecordingSlan();
         slan.failSendTo = true;
         const errors = recordingErrors();
-        const out = new OutboundChannel(slan, 'self', errors);
+        const out = new OutboundChannel(slan, 'self', errors, 7);
 
         await out.status('peer', payloads);
         expect(errors.calls).toHaveLength(1);

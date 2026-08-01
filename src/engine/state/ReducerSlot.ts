@@ -2,6 +2,7 @@ import type { Address, ReducerName } from '../../domain/address.js';
 import type { Context } from '../../domain/context.js';
 import type { ReducerPayload } from '../../domain/message.js';
 import type { TranslatedState } from '../../domain/state.js';
+import type { Incarnation, IncarnationValue } from '../../incarnation/Incarnation.js';
 import type { Reducer } from '../../reducer/Reducer.js';
 import { DebateBuffer } from './DebateBuffer.js';
 import { MemoryMap } from './MemoryMap.js';
@@ -15,7 +16,7 @@ import { MemoryMap } from './MemoryMap.js';
  * the engine; a slot never emits a message of its own.
  */
 export class ReducerSlot<Ctx extends Context> {
-    private readonly memory = new MemoryMap<unknown>();
+    private readonly memory: MemoryMap<unknown>;
     private readonly debate = new DebateBuffer<unknown>();
     private readonly departed = new Set<Address>();
 
@@ -23,7 +24,12 @@ export class ReducerSlot<Ctx extends Context> {
     private translated: TranslatedState<unknown> | null = null;
     private outVersion = 0;
 
-    constructor(readonly reducer: Reducer<unknown, unknown, Ctx>) {}
+    constructor(
+        readonly reducer: Reducer<unknown, unknown, Ctx>,
+        incarnation: Incarnation,
+    ) {
+        this.memory = new MemoryMap<unknown>(incarnation);
+    }
 
     get name(): ReducerName {
         return this.reducer.name;
@@ -36,23 +42,32 @@ export class ReducerSlot<Ctx extends Context> {
         return { value: this.translated?.value ?? null, version: this.outVersion };
     }
 
-    /** STATUS contribution → transient DEBATE buffer. Always a candidate change. */
-    ingestStatus(from: Address, value: unknown): boolean {
+    /**
+     * STATUS contribution → transient DEBATE buffer. Always a candidate change, except
+     * from a lifetime we already know to be dead: the DEBATE buffer is otherwise ungated,
+     * so a STATUS redelivered by the carrier long after its sender restarted would land
+     * straight in the next aggregation. Note this can only catch what `Σ` still remembers
+     * — after our own restart `Σ` is empty and stale traffic is the carrier's problem.
+     */
+    ingestStatus(from: Address, value: unknown, inc?: IncarnationValue): boolean {
+        if (this.memory.isOlderIncarnation(from, inc)) return false;
         this.debate.set(from, value);
         return true;
     }
-    /** SHARE contribution → version-gated `Σ` slot. Returns whether the value changed. */
-    ingestShare(from: Address, value: unknown, version: number, now: number): boolean {
-        return this.memory.update(from, value, version, now);
+    /** SHARE contribution → `(ι, v)`-gated `Σ` slot. Returns whether the value changed. */
+    ingestShare(from: Address, value: unknown, version: number, now: number, inc?: IncarnationValue): boolean {
+        return this.memory.update(from, value, version, now, inc);
     }
 
     /**
      * CLOSE contribution → transient departed-address buffer (consumed by the CLOSE phase).
      * Buffers only peers actually present in `Σ`, mirroring "ignore the close of a peer we
      * never knew"; returns whether a new departure was buffered (the trigger for a CLOSE
-     * round).
+     * round). A departure announced by a strictly older lifetime is ignored, so a peer's
+     * pre-restart CLOSE arriving late cannot evict the incarnation that replaced it.
      */
-    ingestClose(addr: Address): boolean {
+    ingestClose(addr: Address, inc?: IncarnationValue): boolean {
+        if (this.memory.isOlderIncarnation(addr, inc)) return false;
         if (!this.memory.has(addr) || this.departed.has(addr)) return false;
         this.departed.add(addr);
         return true;

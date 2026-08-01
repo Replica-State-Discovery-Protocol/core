@@ -1,12 +1,15 @@
 import { describe, expect, it } from 'vitest';
 
+import { FakeClock } from '../../../src/clock/Clock.js';
 import type { Context } from '../../../src/domain/context.js';
 import { ReducerSlot } from '../../../src/engine/state/ReducerSlot.js';
 import { SlotRegistry } from '../../../src/engine/state/SlotRegistry.js';
+import { TimestampIncarnation } from '../../../src/incarnation/Incarnation.js';
 import type { Aggregator } from '../../../src/reducer/pipeline/stages.js';
 import { defineReducer, type Reducer } from '../../../src/reducer/Reducer.js';
 
 const ctx: Context = { self: 'a' };
+const inc = (): TimestampIncarnation => new TimestampIncarnation(new FakeClock(0));
 
 const union = (self: string): Aggregator<string[], string[], Context> => ({
     aggregate: (b) => [...new Set([self, ...b.flat()])].sort(),
@@ -23,8 +26,8 @@ const makeReducer = (name: string): Reducer<unknown, unknown, Context> =>
 describe('SlotRegistry', () => {
     it('adds, looks up by name, and iterates slots', () => {
         const reg = new SlotRegistry<Context>();
-        const m = new ReducerSlot<Context>(makeReducer('members'));
-        const p = new ReducerSlot<Context>(makeReducer('peers'));
+        const m = new ReducerSlot<Context>(makeReducer('members'), inc());
+        const p = new ReducerSlot<Context>(makeReducer('peers'), inc());
         reg.add(m);
         reg.add(p);
 
@@ -35,9 +38,9 @@ describe('SlotRegistry', () => {
 
     it('composite() emits one versioned payload per reducer', async () => {
         const reg = new SlotRegistry<Context>();
-        const m = new ReducerSlot<Context>(makeReducer('members'));
+        const m = new ReducerSlot<Context>(makeReducer('members'), inc());
         reg.add(m);
-        reg.add(new ReducerSlot<Context>(makeReducer('peers')));
+        reg.add(new ReducerSlot<Context>(makeReducer('peers'), inc()));
 
         m.ingestShare('b', ['b'], 1, 1000);
         await m.runShare(ctx);
@@ -51,7 +54,7 @@ describe('SlotRegistry', () => {
     it('exposes state by reducer handle and by name, and via the snapshot view', async () => {
         const reg = new SlotRegistry<Context>();
         const reducer = makeReducer('members');
-        const m = new ReducerSlot<Context>(reducer);
+        const m = new ReducerSlot<Context>(reducer, inc());
         reg.add(m);
         await m.runShare(ctx); // self-only → ['a']
 

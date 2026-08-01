@@ -12,6 +12,9 @@ export type { CreateEngineOptions, Engine, EngineConfig, StateSnapshot } from '.
 export { createEngine } from './engine/Engine.js';
 export type { PipelineErrorContext } from './errors.js';
 export { ConfigError, GuardRejected, PipelineError, PipelineStage, RsdpError, SlanError } from './errors.js';
+// The incarnation strategy is injected as an instance; both implementations are values.
+export type { Incarnation, IncarnationValue } from './incarnation/Incarnation.js';
+export { StaticIncarnation, TimestampIncarnation } from './incarnation/Incarnation.js';
 export type {
     Aggregator,
     ExceptionFilter,

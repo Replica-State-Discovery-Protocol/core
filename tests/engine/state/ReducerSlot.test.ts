@@ -1,7 +1,9 @@
 import { describe, expect, it } from 'vitest';
 
+import { FakeClock } from '../../../src/clock/Clock.js';
 import type { Context } from '../../../src/domain/context.js';
 import { ReducerSlot } from '../../../src/engine/state/ReducerSlot.js';
+import { TimestampIncarnation } from '../../../src/incarnation/Incarnation.js';
 import type { Aggregator } from '../../../src/reducer/pipeline/stages.js';
 import { defineReducer, type Reducer } from '../../../src/reducer/Reducer.js';
 
@@ -21,7 +23,7 @@ const makeReducer = (self: string): Reducer<unknown, unknown, Context> =>
             translate: (s, prev) => ({ value: s, changed: JSON.stringify(s) !== JSON.stringify(prev) }),
         }) as unknown as Reducer<unknown, unknown, Context>;
 
-const slot = () => new ReducerSlot<Context>(makeReducer('a'));
+const slot = () => new ReducerSlot<Context>(makeReducer('a'), new TimestampIncarnation(new FakeClock(0)));
 
 describe('ReducerSlot', () => {
     it('starts empty: null state, version 0 payload', () => {
@@ -99,5 +101,52 @@ describe('ReducerSlot', () => {
         s.ingestShare('b', ['b'], 1, 1000);
         expect(s.sweep(1400, 600)).toBe(false); // 1400 - 1000 = 400 < 600, still alive
         expect(s.sweep(1700, 600)).toBe(true); // 1700 - 1000 = 700 >= 600, evicted
+    });
+});
+
+describe('ReducerSlot incarnation gating', () => {
+    it('ingestShare adopts a restarted peer whose version restarted below the stored one', () => {
+        const s = slot();
+        s.ingestShare('b', ['b', 'stale'], 5, 1000, 100);
+
+        expect(s.ingestShare('b', ['b'], 1, 2000, 200)).toBe(true);
+    });
+
+    it('ingestStatus drops a perspective from a strictly older lifetime', () => {
+        // A STATUS redelivered from a broker queue long after the sender restarted must
+        // not enter the DEBATE buffer, where nothing else would gate it.
+        const s = slot();
+        s.ingestShare('b', ['b'], 1, 1000, 200);
+
+        expect(s.ingestStatus('b', ['b', 'ghost'], 100)).toBe(false);
+    });
+
+    it('ingestStatus accepts the current lifetime, an unknown peer, and an absent ι', () => {
+        const s = slot();
+        s.ingestShare('b', ['b'], 1, 1000, 200);
+
+        expect(s.ingestStatus('b', ['b'], 200)).toBe(true); // same lifetime
+        expect(s.ingestStatus('b', ['b'], 300)).toBe(true); // newer lifetime
+        expect(s.ingestStatus('b', ['b'])).toBe(true); // legacy peer, no ι
+        expect(s.ingestStatus('never-seen', ['z'], 1)).toBe(true); // nothing to compare against
+    });
+
+    it('a dropped STATUS does not reach the DEBATE round', async () => {
+        const s = slot();
+        s.ingestShare('b', ['b'], 1, 1000, 200);
+        s.ingestStatus('b', ['b', 'ghost'], 100);
+
+        await s.runDebate(ctx);
+        expect(s.state?.value).toEqual(['a', 'b']); // 'ghost' never entered the batch
+    });
+
+    it('ingestClose ignores a departure announced by a strictly older lifetime', () => {
+        // The graceful-CLOSE race: `b` stops, restarts, and its pre-restart CLOSE is
+        // delivered late — it must not evict the live incarnation that replaced it.
+        const s = slot();
+        s.ingestShare('b', ['b'], 1, 1000, 200);
+
+        expect(s.ingestClose('b', 100)).toBe(false);
+        expect(s.ingestClose('b', 200)).toBe(true); // the current lifetime may still depart
     });
 });

@@ -4,6 +4,8 @@ import type { NodeIdentity, ReducerName } from '../domain/address.js';
 import type { Context } from '../domain/context.js';
 import type { TranslatedState } from '../domain/state.js';
 import type { RsdpError } from '../errors.js';
+import type { Incarnation } from '../incarnation/Incarnation.js';
+import { TimestampIncarnation } from '../incarnation/Incarnation.js';
 import type { Reducer } from '../reducer/Reducer.js';
 import type { Slan, Unsubscribe } from '../slan/Slan.js';
 import { ErrorChannel } from './channels/ErrorChannel.js';
@@ -69,6 +71,14 @@ export interface CreateEngineOptions<Ctx extends Context> {
     reducers: Reducer<any, any, Ctx>[];
     config: EngineConfig;
     clock?: Clock;
+    /**
+     * This process lifetime's restart epoch `ι` (eq. 15), which lets peers tell a restarted
+     * node's reset version counter from a stale one. Defaults to the local clock reading at
+     * construction — sound because `ι` is only ever compared against the *same* node's
+     * previous `ι`, so no cross-node clock agreement is required. Override to supply a
+     * persisted counter, or a {@link StaticIncarnation} to get the pre-amendment behavior.
+     */
+    incarnation?: Incarnation;
     observer?: (snapshot: StateSnapshot<Ctx>) => void;
 }
 
@@ -92,10 +102,12 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
 
     constructor(private readonly opts: CreateEngineOptions<Ctx>) {
         this.clock = opts.clock ?? new SystemClock();
-        this.outbound = new OutboundChannel(opts.slan, opts.identity.address, this.errors);
+
+        const incarnation = opts.incarnation ?? new TimestampIncarnation(this.clock);
+        this.outbound = new OutboundChannel(opts.slan, opts.identity.address, this.errors, incarnation.value);
 
         for (const r of opts.reducers) {
-            this.registry.add(new ReducerSlot<Ctx>(r as Reducer<unknown, unknown, Ctx>));
+            this.registry.add(new ReducerSlot<Ctx>(r as Reducer<unknown, unknown, Ctx>, incarnation));
         }
 
         this.coordinator = new Coordinator<Ctx>({

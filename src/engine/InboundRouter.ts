@@ -39,21 +39,26 @@ export class InboundRouter<Ctx extends Context> {
             case MessageType.Status:
                 this.ingest(
                     msg,
-                    (slot, p) => slot.ingestStatus(from, p.value),
+                    (slot, p) => slot.ingestStatus(from, p.value, msg.inc),
                     () => this.scheduler.scheduleDebate(),
                 );
                 return;
             case MessageType.Share:
                 this.ingest(
                     msg,
-                    (slot, p) => slot.ingestShare(from, p.value, p.version, this.clock.now()),
+                    (slot, p) => slot.ingestShare(from, p.value, p.version, this.clock.now(), msg.inc),
                     () => this.scheduler.scheduleSteady(),
                 );
                 return;
             case MessageType.Close: {
                 const closed = msg.closed ?? from;
+                // `msg.inc` is the SENDER's lifetime. It only describes the departing node
+                // when a node announces its own departure — which is the only CLOSE the
+                // engine emits. A relayed CLOSE about a third party carries no usable ι, so
+                // it stays ungated rather than being gated against the wrong node's epoch.
+                const closedInc = closed === from ? msg.inc : undefined;
                 let buffered = false;
-                for (const slot of this.registry.values()) if (slot.ingestClose(closed)) buffered = true;
+                for (const slot of this.registry.values()) if (slot.ingestClose(closed, closedInc)) buffered = true;
                 if (buffered) this.scheduler.scheduleClose();
                 return;
             }

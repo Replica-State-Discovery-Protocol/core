@@ -10,6 +10,7 @@ import { OutboundChannel } from '../../src/engine/channels/OutboundChannel.js';
 import { Coordinator } from '../../src/engine/Coordinator.js';
 import { ReducerSlot } from '../../src/engine/state/ReducerSlot.js';
 import { SlotRegistry } from '../../src/engine/state/SlotRegistry.js';
+import { TimestampIncarnation } from '../../src/incarnation/Incarnation.js';
 import type { Aggregator } from '../../src/reducer/pipeline/stages.js';
 import { defineReducer, type Reducer } from '../../src/reducer/Reducer.js';
 import type { Slan } from '../../src/slan/Slan.js';
@@ -56,10 +57,10 @@ const setup = () => {
     const clock = new FakeClock(0);
     const registry = new SlotRegistry<Context>();
     const r = reducer();
-    registry.add(new ReducerSlot<Context>(r));
+    registry.add(new ReducerSlot<Context>(r, new TimestampIncarnation(clock)));
     const slan = new RecordingSlan();
     const errors = new ErrorChannel<Context>();
-    const outbound = new OutboundChannel(slan, 'a', errors);
+    const outbound = new OutboundChannel(slan, 'a', errors, 1);
     const coordinator = new Coordinator<Context>({
         clock,
         registry,
