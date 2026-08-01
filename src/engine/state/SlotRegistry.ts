@@ -1,6 +1,7 @@
 import type { ReducerName } from '../../domain/address.js';
 import type { Context } from '../../domain/context.js';
 import type { ReducerPayload } from '../../domain/message.js';
+import type { PeerEviction, PeerSnapshot } from '../../domain/peer.js';
 import type { TranslatedState } from '../../domain/state.js';
 import type { Reducer } from '../../reducer/Reducer.js';
 import type { StateSnapshot } from '../Engine.js';
@@ -41,10 +42,21 @@ export class SlotRegistry<Ctx extends Context> {
         };
     }
 
-    /** TTL sweep across every reducer's `Σ`. Returns whether any peer was evicted. */
-    sweepExpired(now: number, ttlMs: number): boolean {
-        let changed = false;
-        for (const slot of this.slots.values()) if (slot.sweep(now, ttlMs)) changed = true;
-        return changed;
+    /**
+     * TTL sweep across every reducer's `Σ`. Returns what each reducer lost, omitting the
+     * slots that lost nothing — so an empty array means "no eviction happened at all".
+     */
+    sweepExpired(now: number, ttlMs: number): PeerEviction[] {
+        const evictions: PeerEviction[] = [];
+        for (const slot of this.slots.values()) {
+            const addrs = slot.sweep(now, ttlMs);
+            if (addrs.length > 0) evictions.push({ reducer: slot.name, addrs });
+        }
+        return evictions;
+    }
+
+    /** One reducer's `Σ`; empty for a reducer this engine does not run. */
+    sigmaOf<State, View>(reducer: Reducer<State, View, Ctx>): PeerSnapshot[] {
+        return this.slots.get(reducer.name)?.sigma() ?? [];
     }
 }

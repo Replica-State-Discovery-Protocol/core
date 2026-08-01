@@ -96,11 +96,22 @@ describe('ReducerSlot', () => {
         expect(await s.runClose(ctx)).toBe(false);
     });
 
-    it('sweep evicts peers unseen past the TTL', () => {
+    it('sweep reports exactly which peers it evicted', () => {
         const s = slot();
         s.ingestShare('b', ['b'], 1, 1000);
-        expect(s.sweep(1400, 600)).toBe(false); // 1400 - 1000 = 400 < 600, still alive
-        expect(s.sweep(1700, 600)).toBe(true); // 1700 - 1000 = 700 >= 600, evicted
+        s.ingestShare('c', ['c'], 1, 1000);
+        s.ingestShare('d', ['d'], 1, 1500);
+
+        expect(s.sweep(1400, 600)).toEqual([]); // 1400 - 1000 = 400 < 600, all alive
+        expect(s.sweep(1700, 600).sort()).toEqual(['b', 'c']); // 'd' seen at 1500, survives
+        expect(s.sweep(2200, 600)).toEqual(['d']);
+    });
+
+    it('sigma exposes Σ as the record metadata eq. (7) is defined over', () => {
+        const s = slot();
+        s.ingestShare('b', ['b'], 3, 1000, 42);
+
+        expect(s.sigma()).toEqual([{ addr: 'b', version: 3, inc: 42, lastSeenAt: 1000 }]);
     });
 });
 

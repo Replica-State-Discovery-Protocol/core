@@ -1,19 +1,20 @@
 import { describe, expect, it } from 'vitest';
 
 import { FakeClock } from '../../../src/clock/Clock.js';
+import type { PeerEviction } from '../../../src/domain/peer.js';
 import { type Sweepable, TtlSweeper } from '../../../src/engine/schedule/TtlSweeper.js';
 
-// Records sweep calls and returns a queued "evicted?" verdict per tick.
+// Records sweep calls and returns a queued eviction report per tick.
 class FakeTarget implements Sweepable {
     readonly calls: { now: number; ttlMs: number }[] = [];
-    private verdicts: boolean[] = [];
+    private verdicts: PeerEviction[][] = [];
 
-    queue(...evicted: boolean[]): void {
+    queue(...evicted: PeerEviction[][]): void {
         this.verdicts.push(...evicted);
     }
-    sweepExpired(now: number, ttlMs: number): boolean {
+    sweepExpired(now: number, ttlMs: number): PeerEviction[] {
         this.calls.push({ now, ttlMs });
-        return this.verdicts.shift() ?? false;
+        return this.verdicts.shift() ?? [];
     }
 }
 
@@ -36,14 +37,13 @@ describe('TtlSweeper', () => {
         sweeper.stop();
     });
 
-    it('fires onEvicted only when a sweep actually removed something', () => {
+    it('fires onEvicted only when a sweep actually removed something, passing what was lost', () => {
         const clock = new FakeClock(0);
         const target = new FakeTarget();
-        let evictions = 0;
-        const sweeper = new TtlSweeper(clock, target, 1000, 100, () => {
-            evictions += 1;
-        });
-        target.queue(false, true, false); // 1st tick: none, 2nd: evicted, 3rd: none
+        const seen: PeerEviction[][] = [];
+        const sweeper = new TtlSweeper(clock, target, 1000, 100, (e) => seen.push(e));
+        const lost: PeerEviction[] = [{ reducer: 'members', addrs: ['b', 'c'] }];
+        target.queue([], lost, []); // 1st tick: none, 2nd: evicted, 3rd: none
 
         sweeper.start();
         clock.advance(100);
@@ -51,7 +51,7 @@ describe('TtlSweeper', () => {
         clock.advance(100);
 
         expect(target.calls).toHaveLength(3);
-        expect(evictions).toBe(1);
+        expect(seen).toEqual([lost]);
         sweeper.stop();
     });
 

@@ -1,5 +1,5 @@
 import type { Address } from '../../domain/address.js';
-import type { PeerRecord } from '../../domain/peer.js';
+import type { PeerRecord, PeerSnapshot } from '../../domain/peer.js';
 import type { Incarnation, IncarnationValue } from '../../incarnation/Incarnation.js';
 
 export class MemoryMap<Payload> {
@@ -73,6 +73,16 @@ export class MemoryMap<Payload> {
 
     snapshot(): readonly (readonly [Address, Payload])[] {
         return [...this.records.entries()].map(([addr, rec]) => [addr, rec.payload] as const);
+    }
+
+    /** `Σ` as record metadata (no payloads) — see {@link PeerSnapshot}. */
+    peers(): PeerSnapshot[] {
+        return [...this.records.entries()].map(([addr, rec]) => ({
+            addr,
+            version: rec.version,
+            inc: rec.inc,
+            lastSeenAt: rec.lastSeenAt,
+        }));
     }
 
     get size(): number {

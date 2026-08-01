@@ -3,7 +3,7 @@ export type { Context } from './domain/context.js';
 // MessageType is a runtime string enum — export as value so MessageType.Share etc. are available.
 export type { ReducerPayload, WireMessage } from './domain/message.js';
 export { MessageType } from './domain/message.js';
-export type { PeerRecord } from './domain/peer.js';
+export type { PeerEviction, PeerRecord, PeerSnapshot } from './domain/peer.js';
 export type { TranslatedState } from './domain/state.js';
 // Error classes are runtime values; PipelineStage is a runtime enum — all exported as values.
 export type { Clock, TimerHandle } from './clock/Clock.js';

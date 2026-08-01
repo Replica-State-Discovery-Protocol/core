@@ -1,6 +1,7 @@
 import type { Address, ReducerName } from '../../domain/address.js';
 import type { Context } from '../../domain/context.js';
 import type { ReducerPayload } from '../../domain/message.js';
+import type { PeerSnapshot } from '../../domain/peer.js';
 import type { TranslatedState } from '../../domain/state.js';
 import type { Incarnation, IncarnationValue } from '../../incarnation/Incarnation.js';
 import type { Reducer } from '../../reducer/Reducer.js';
@@ -72,9 +73,13 @@ export class ReducerSlot<Ctx extends Context> {
         this.departed.add(addr);
         return true;
     }
-    /** TTL sweep. Returns whether any peer was evicted. */
-    sweep(now: number, ttlMs: number): boolean {
-        return this.memory.sweepExpired(now, ttlMs).length > 0;
+    /** TTL sweep. Returns the addresses evicted from this reducer's `Σ`. */
+    sweep(now: number, ttlMs: number): Address[] {
+        return this.memory.sweepExpired(now, ttlMs);
+    }
+    /** This reducer's `Σ` as record metadata — the object eq. (7) is defined over. */
+    sigma(): PeerSnapshot[] {
+        return this.memory.peers();
     }
 
     /**

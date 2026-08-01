@@ -2,6 +2,7 @@ import type { Clock } from '../clock/Clock.js';
 import { SystemClock } from '../clock/Clock.js';
 import type { NodeIdentity, ReducerName } from '../domain/address.js';
 import type { Context } from '../domain/context.js';
+import type { PeerEviction, PeerSnapshot } from '../domain/peer.js';
 import type { TranslatedState } from '../domain/state.js';
 import type { RsdpError } from '../errors.js';
 import type { Incarnation } from '../incarnation/Incarnation.js';
@@ -58,7 +59,16 @@ export interface Engine<Ctx extends Context> {
     stop(): Promise<void>;
     stateOf<State, View>(reducer: Reducer<State, View, Ctx>): TranslatedState<View> | null;
     stateByName(name: ReducerName): TranslatedState<unknown> | null;
+    /**
+     * This node's `Σ` for one reducer: which peers it knows, at what version and
+     * incarnation, and when each was last heard from. Read-only introspection — the
+     * derived view lags `Σ` by the debounce window, so liveness and detection questions
+     * must be answered here rather than from {@link stateOf}.
+     */
+    sigmaOf<State, View>(reducer: Reducer<State, View, Ctx>): PeerSnapshot[];
     onConverged(cb: (snapshot: StateSnapshot<Ctx>) => void): Unsubscribe;
+    /** Fires when a TTL sweep removes peers, with what each reducer lost. */
+    onEvicted(cb: (evictions: PeerEviction[]) => void): Unsubscribe;
     onError(cb: (err: RsdpError) => void): Unsubscribe;
     /** Test/operational aid: resolve once all pending reducer runs are idle. */
     settle(): Promise<void>;
@@ -97,6 +107,7 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     private readonly coordinator: Coordinator<Ctx>;
     private readonly router: InboundRouter<Ctx>;
     private readonly sweeper: TtlSweeper;
+    private readonly evictedCbs = new Set<(evictions: PeerEviction[]) => void>();
 
     private unsub: Unsubscribe | null = null;
 
@@ -121,8 +132,17 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
             observer: opts.observer,
         });
         this.router = new InboundRouter<Ctx>(this.registry, this.outbound, this.clock, this.coordinator);
-        this.sweeper = new TtlSweeper(this.clock, this.registry, opts.config.ttlMs, opts.config.sweepIntervalMs, () =>
-            this.coordinator.scheduleSteady(),
+        this.sweeper = new TtlSweeper(
+            this.clock,
+            this.registry,
+            opts.config.ttlMs,
+            opts.config.sweepIntervalMs,
+            (evictions) => {
+                // Notify before re-aggregating, so a subscriber timestamps the eviction at
+                // the sweep instant rather than after the debounced recompute.
+                for (const cb of this.evictedCbs) cb(evictions);
+                this.coordinator.scheduleSteady();
+            },
         );
     }
 
@@ -150,9 +170,16 @@ class EngineImpl<Ctx extends Context> implements Engine<Ctx> {
     stateByName(name: ReducerName): TranslatedState<unknown> | null {
         return this.registry.stateByName(name);
     }
+    sigmaOf<State, View>(reducer: Reducer<State, View, Ctx>): PeerSnapshot[] {
+        return this.registry.sigmaOf(reducer);
+    }
 
     onConverged(cb: (s: StateSnapshot<Ctx>) => void): Unsubscribe {
         return this.coordinator.onConverged(cb);
+    }
+    onEvicted(cb: (evictions: PeerEviction[]) => void): Unsubscribe {
+        this.evictedCbs.add(cb);
+        return () => this.evictedCbs.delete(cb);
     }
     onError(cb: (e: RsdpError) => void): Unsubscribe {
         return this.errors.subscribe(cb);

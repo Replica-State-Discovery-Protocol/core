@@ -125,6 +125,39 @@ describe('MemoryMap incarnation gate (eq. 15)', () => {
     });
 });
 
+describe('MemoryMap.peers', () => {
+    it('is empty before anything is known', () => {
+        expect(mk().peers()).toEqual([]);
+    });
+
+    it('exposes the per-peer record metadata that eq. (3) and eq. (7) are defined over', () => {
+        const m = mk();
+        m.update('a', 'x', 5, 1000, 42);
+        m.update('b', 'y', 1, 1200);
+
+        expect(m.peers()).toEqual([
+            { addr: 'a', version: 5, inc: 42, lastSeenAt: 1000 },
+            { addr: 'b', version: 1, inc: undefined, lastSeenAt: 1200 },
+        ]);
+    });
+
+    it('tracks the liveness refresh an equal-version heartbeat performs', () => {
+        const m = mk();
+        m.update('a', 'x', 5, 1000, 42);
+        m.update('a', 'x', 5, 4000, 42);
+
+        expect(m.peers()[0]?.lastSeenAt).toBe(4000);
+    });
+
+    it('drops a peer once it is swept', () => {
+        const m = mk();
+        m.update('a', 'x', 1, 1000);
+        m.sweepExpired(5000, 600);
+
+        expect(m.peers()).toEqual([]);
+    });
+});
+
 describe('MemoryMap.isOlderIncarnation', () => {
     it('reports false for a peer it has never seen', () => {
         expect(mk().isOlderIncarnation('nobody', 1)).toBe(false);
